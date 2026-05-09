@@ -21,12 +21,12 @@ set(SRC_DIR ${PROJECT_SOURCE_DIR}/src)
 set(3RDPARTY_DIR ${PROJECT_SOURCE_DIR}/3rdparty)
 
 # 安全编译选项控制
-set(UBTURBO_TDSQL_COMMON_FLAGS "")
+set(UBS_ATOMIC_COMMON_FLAGS "")
 set(SECURE_LD_FLAGS "-Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -pie -Wl,--build-id=none")
 set(SECURE_C_FLAGS "-fstack-protector-strong")
 # LST原子指令集编译选项
 set(MARCH_FLAGS "-march=armv8-a+lse")
-set(COMMON_FLAGS "-fno-omit-frame-pointer ${SECURE_C_FLAGS} ${SECURE_LD_FLAGS} ${UBTURBO_TDSQL_COMMON_FLAGS} ${MARCH_FLAGS}")
+set(COMMON_FLAGS "-fno-omit-frame-pointer ${SECURE_C_FLAGS} ${SECURE_LD_FLAGS} ${UBS_ATOMIC_COMMON_FLAGS} ${MARCH_FLAGS}")
 
 if (CMAKE_BUILD_TYPE MATCHES "^[Dd]ebug")
     set(DEBUG_FLAGS "-O0 -ggdb3 -fPIE")
