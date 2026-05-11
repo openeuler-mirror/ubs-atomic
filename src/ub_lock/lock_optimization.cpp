@@ -22,6 +22,10 @@ void LocalLock::init_()
     sx_recursive_.store(0, std::memory_order_release);
 
     local_is_reserve_lock.store(UB_LOCK_I, std::memory_order_release);
+    remote_release_in_progress_.store(false, std::memory_order_release);
+    hold_global.store(false, std::memory_order_release);
+    global_state_.store(GLOBAL_IDLE, std::memory_order_release);
+    global_read_ref_count_.store(0, std::memory_order_release);
     create_wait_queue();
 }
 
@@ -190,7 +194,7 @@ ub_lock_result_t LocalLock::lock_s(int32_t tid, steady_time_point deadline)
             }
             if (is_awakened) {
                 cpu_relax();
-                i--;
+                --i;
                 if (std::chrono::steady_clock::now() > deadline) {
                     clean_timeout_waiter(slot);
                     ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
@@ -247,19 +251,18 @@ ub_lock_result_t LocalLock::lock_x(bool allow_recursive, int32_t tid, steady_tim
             if (waiting_count.load(std::memory_order_acquire) > 0 && !is_awakened)
                 break;
             int32_t cur = lock_word.v.load(std::memory_order_acquire);
-            if (cur == X_LOCK_DECR) {
-                if (lock_word.v.compare_exchange_weak(cur, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                    lock_x_owner.store(tid, std::memory_order_release);
-                    x_recursive_.store(1, std::memory_order_release);
-                    if (is_awakened) {
-                        clean_outqueue_waiter(slot);
-                    }
-                    return UB_LOCK_SUCCESS;
+            if (cur == X_LOCK_DECR &&
+                lock_word.v.compare_exchange_weak(cur, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                lock_x_owner.store(tid, std::memory_order_release);
+                x_recursive_.store(1, std::memory_order_release);
+                if (is_awakened) {
+                    clean_outqueue_waiter(slot);
                 }
+                return UB_LOCK_SUCCESS;
             }
             if (is_awakened) {
                 cpu_relax();
-                i--;
+                --i;
                 if (std::chrono::steady_clock::now() > deadline) {
                     clean_timeout_waiter(slot);
                     ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
@@ -330,7 +333,7 @@ ub_lock_result_t LocalLock::lock_sx(bool allow_recursive, int32_t tid, steady_ti
             }
             if (is_awakened) {
                 cpu_relax();
-                i--;
+                --i;
                 if (std::chrono::steady_clock::now() > deadline) {
                     clean_timeout_waiter(slot);
                     ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
@@ -382,8 +385,7 @@ ub_lock_result_t LocalLock::unlock_s()
         return UB_LOCK_ERROR;
     }
     // 唤醒等待者（仅当最后一个读者释放）
-    if (lock_word.v.load(std::memory_order_acquire) == X_LOCK_DECR &&
-        waiting_count.load(std::memory_order_acquire) > 0) {
+    if (now == X_LOCK_DECR && waiting_count.load(std::memory_order_acquire) > 0) {
         wake_after_unlock_exclusive();
     }
     return UB_LOCK_SUCCESS;
@@ -478,6 +480,7 @@ ub_lock_result_t DistributedLock::delay_unlock(ub_lock_mode_t mode, uint8_t node
             if (now == X_LOCK_DECR && rw_lock_shm_->waiting_count.load(std::memory_order_acquire) > 0) {
                 wake_after_unlock_exclusive(location); // 失败没有合适的等待者（超时）
             }
+            clear_shared_owner_bitmap(rw_lock_shm_, location.node_id);
             return UB_LOCK_SUCCESS;
         }
         case UB_LOCK_SX: {
@@ -572,97 +575,6 @@ ub_lock_result_t DistributedLock::delay_release_ub_lock(ub_lock_mode_t mode, Loc
     body.mode = mode;
 
     return notify_unlock(owner, location.node_id, body); // 消息通知
-}
-/*
-    本地锁释放 + 开启延迟释放
-    1、调用本地锁释放(has_local_locks获取)
-    2、成功后判断释放开启延迟释放
-    3、开启则调用delay_unlock (设置两个flag)
-*/
-ub_lock_result_t DistributedLock::local_try_unlock_s(bool allow_delay_release, const ub_location_t &location)
-{
-    std::shared_ptr<LocalLock> ll_sp;
-    ll_sp = lookup_local_lock(rw_lock_shm_);
-    LocalLock *local_lock = ll_sp.get();
-    if (!local_lock)
-        return UB_LOCK_SUCCESS;
-    (void)local_lock->unlock_s();
-    int32_t old_ref = local_lock->global_read_ref_count_.fetch_sub(1, std::memory_order_acq_rel);
-    if (old_ref > 1) {
-        // 不是最后一个
-        return UB_LOCK_CONFLICT;
-    }
-    uint64_t identify = make_global_owner(location.node_id, location.tid);
-    // 预判是否满足延迟释放条件
-    bool can_delay = allow_delay_release && (rw_lock_shm_->waiting_count.load(std::memory_order_acquire) == 0) &&
-                     local_lock->waiting_count.load(std::memory_order_acquire) == 0;
-    int expected = LocalLock::GLOBAL_HELD;
-    local_lock->global_state_.compare_exchange_strong(expected, LocalLock::GLOBAL_IDLE, std::memory_order_acq_rel,
-                                                      std::memory_order_acquire);
-    local_lock->read_count.store(0, std::memory_order_release);
-    if (can_delay) { // 延迟释放
-        rw_lock_shm_->reserve_lock_owner.store(identify, std::memory_order_release);
-        local_lock->local_is_reserve_lock.store(UB_LOCK_S, std::memory_order_release);
-        return UB_LOCK_CONFLICT;
-    } else {
-        rw_lock_shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
-        local_lock->local_is_reserve_lock.store(UB_LOCK_I, std::memory_order_release);
-        return UB_LOCK_SUCCESS; // 外层执行真正的全局解锁
-    }
-}
-
-ub_lock_result_t DistributedLock::local_try_unlock_x(bool allow_recursive, bool allow_delay_release,
-                                                     const ub_location_t &location)
-{
-    std::shared_ptr<LocalLock> ll_sp;
-    ll_sp = lookup_local_lock(rw_lock_shm_);
-    LocalLock *local_lock = ll_sp.get();
-    if (!local_lock)
-        return UB_LOCK_SUCCESS;
-    uint64_t identify = make_global_owner(location.node_id, location.tid);
-    // 预判是否满足延迟释放条件
-    bool can_delay = allow_delay_release && (rw_lock_shm_->waiting_count.load(std::memory_order_acquire) == 0) &&
-                     local_lock->waiting_count.load(std::memory_order_acquire) == 0;
-    if (can_delay) {
-        rw_lock_shm_->lock_owner_x.store(LOCK_INVALID_OWNER, std::memory_order_release);
-        rw_lock_shm_->reserve_lock_owner.store(identify, std::memory_order_release);
-        local_lock->local_is_reserve_lock.store(UB_LOCK_X, std::memory_order_release);
-        local_lock->global_state_.store(LocalLock::GLOBAL_IDLE, std::memory_order_release);
-        (void)local_lock->unlock_x(allow_recursive, location.tid);
-        return UB_LOCK_CONFLICT; // 返回 CONFLICT 作为“延迟释放已接管”的信号：外层不要再释放全局锁
-    } else {
-        rw_lock_shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
-        local_lock->local_is_reserve_lock.store(UB_LOCK_I, std::memory_order_release);
-        local_lock->global_state_.store(LocalLock::GLOBAL_IDLE, std::memory_order_release);
-        (void)local_lock->unlock_x(allow_recursive, location.tid);
-        return UB_LOCK_SUCCESS; // 外层去解物理全局锁
-    }
-}
-
-ub_lock_result_t DistributedLock::local_try_unlock_sx(bool allow_recursive, bool allow_delay_release,
-                                                      const ub_location_t &location)
-{
-    std::shared_ptr<LocalLock> ll_sp;
-    ll_sp = lookup_local_lock(rw_lock_shm_);
-    LocalLock *local_lock = ll_sp.get();
-    if (!local_lock)
-        return UB_LOCK_SUCCESS;
-    uint64_t identify = make_global_owner(location.node_id, location.tid);
-    // 预判是否满足延迟释放条件
-    bool can_delay = allow_delay_release && (rw_lock_shm_->waiting_count.load(std::memory_order_acquire) == 0) &&
-                     local_lock->waiting_count.load(std::memory_order_acquire) == 0;
-    if (can_delay) {
-        rw_lock_shm_->lock_owner_sx.store(LOCK_INVALID_OWNER, std::memory_order_release);
-        rw_lock_shm_->reserve_lock_owner.store(identify, std::memory_order_release);
-        local_lock->local_is_reserve_lock.store(UB_LOCK_SX, std::memory_order_release);
-        (void)local_lock->unlock_sx(allow_recursive, location.tid);
-        return UB_LOCK_CONFLICT; // 返回 CONFLICT 作为“延迟释放已接管”的信号：外层不要再释放全局锁
-    } else {
-        rw_lock_shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
-        local_lock->local_is_reserve_lock.store(UB_LOCK_I, std::memory_order_release);
-        (void)local_lock->unlock_sx(allow_recursive, location.tid);
-        return UB_LOCK_SUCCESS; // 通知外层去解全局锁
-    }
 }
 
 } // namespace ublock

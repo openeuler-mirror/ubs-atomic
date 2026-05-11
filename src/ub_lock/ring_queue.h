@@ -10,6 +10,53 @@
 
 namespace ublock {
 
+template <typename Slot>
+inline void ring_queue_reset_payload(Slot &slot)
+{
+    (void)slot;
+}
+
+inline void ring_queue_reset_payload(ub_waiter_t &slot)
+{
+    slot.mode = UB_LOCK_I;
+    slot.location.tid = 0;
+    slot.location.node_id = 0xFF;
+}
+
+inline void ring_queue_reset_payload(local_waiter_t &slot)
+{
+    slot.mode = UB_LOCK_I;
+    slot.tid = 0;
+}
+
+template <typename Count>
+inline void ring_queue_try_dec_count(Count &count)
+{
+    uint32_t cur = count.load(std::memory_order_acquire);
+    while (cur > 0u) {
+        if (count.compare_exchange_weak(cur, cur - 1u, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return;
+        }
+    }
+}
+
+template <typename Slot, typename Count>
+inline bool ring_queue_try_mark_timeout(Slot &slot, Count &count)
+{
+    uint32_t seq = slot.seq.load(std::memory_order_acquire);
+    while (seq == UB_WAIT_WRITING || seq == UB_WAIT_WAITING || seq == UB_WAIT_NOTIFIED) {
+        uint32_t expected = seq;
+        if (slot.seq.compare_exchange_weak(expected, UB_WAIT_TIMEOUT, std::memory_order_acq_rel,
+                                           std::memory_order_acquire)) {
+            ring_queue_reset_payload(slot);
+            ring_queue_try_dec_count(count);
+            return true;
+        }
+        seq = expected;
+    }
+    return false;
+}
+
 template <uint32_t CAP, typename Slot, typename Head, typename Tail, typename Count, typename InitPayloadFn>
 inline void ring_queue_init(Head &head, Tail &tail, Count &count, Slot *slots, InitPayloadFn init_payload)
 {
@@ -50,26 +97,35 @@ template <uint32_t CAP, typename Slot, typename Head, typename Tail, typename Co
 inline ub_lock_result_t ring_queue_enqueue(Head &head, Tail &tail, Count &count, Slot *slots,
                                            WritePayloadFn write_payload, uint32_t &out_ticket)
 {
-    uint32_t old = count.fetch_add(1u, std::memory_order_relaxed);
-    if (old >= CAP) {
-        count.fetch_sub(1u, std::memory_order_relaxed);
-        return UB_LOCK_ERROR;
+    using head_type = typename std::decay_t<decltype(head.load())>;
+    using tail_type = typename std::decay_t<decltype(tail.load())>;
+
+    tail_type ticket_raw = 0;
+    while (true) {
+        const head_type h = head.load(std::memory_order_acquire);
+        tail_type t = tail.load(std::memory_order_acquire);
+        if ((static_cast<uint32_t>(t) - static_cast<uint32_t>(h)) >= CAP) {
+            return UB_LOCK_ERROR;
+        }
+        const tail_type next = static_cast<tail_type>(t + static_cast<tail_type>(1));
+        if (tail.compare_exchange_weak(t, next, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            ticket_raw = t;
+            break;
+        }
+        cpu_relax();
     }
 
-    const uint32_t ticket = static_cast<uint32_t>(tail.fetch_add(1u, std::memory_order_relaxed));
+    const uint32_t ticket = static_cast<uint32_t>(ticket_raw);
     const uint32_t idx = ticket & (CAP - 1u);
     Slot &slot = slots[idx];
 
     using seq_type = typename std::decay_t<decltype(slot.seq.load())>;
     seq_type seq = slot.seq.load(std::memory_order_relaxed);
-    if (seq != UB_WAIT_TIMEOUT && seq != UB_WAIT_EMPTY) {
-        count.fetch_sub(1u, std::memory_order_relaxed);
-        return UB_LOCK_ERROR;
-    }
     slot.seq.store(UB_WAIT_WRITING, std::memory_order_release);
     write_payload(slot);
     // Ready (Release)
     slot.seq.store(UB_WAIT_WAITING, std::memory_order_release);
+    count.fetch_add(1u, std::memory_order_release);
     out_ticket = ticket;
     return UB_LOCK_SUCCESS;
 }
@@ -78,9 +134,6 @@ template <uint32_t CAP, typename Slot, typename Head, typename Count>
 inline ub_lock_result_t ring_queue_outqueue(Head &head, Count &count, Slot *slots, Slot *&out_slot)
 {
     using head_type = typename std::decay_t<decltype(head.load())>;
-    if (count.load(std::memory_order_acquire) == 0u) {
-        return UB_LOCK_ERROR;
-    }
     int sanity = static_cast<int>(CAP) * 4;
     while (sanity-- > 0) {
         head_type h = head.load(std::memory_order_acquire);
@@ -113,9 +166,7 @@ inline void ring_queue_clean_timeout(Head &head, Tail &tail, Count &count, Slot 
 {
     const uint32_t idx = ticket & (CAP - 1u);
     Slot &slot = slots[idx];
-
-    slot.seq.store(UB_WAIT_TIMEOUT, std::memory_order_release);
-    count.fetch_sub(1u, std::memory_order_acq_rel);
+    (void)ring_queue_try_mark_timeout(slot, count);
 }
 
 template <uint32_t CAP, typename Slot, typename Head, typename Tail, typename Count>
@@ -123,10 +174,6 @@ inline bool ring_queue_peek_head_mode_clean(Head &head, Tail &tail, Count &count
 {
     using head_type = typename std::decay_t<decltype(head.load())>;
     while (true) {
-        if (count.load(std::memory_order_acquire) == 0u) {
-            return false;
-        }
-
         head_type h = head.load(std::memory_order_acquire);
         head_type t = tail.load(std::memory_order_acquire);
         if (h == t) {
@@ -167,8 +214,9 @@ inline void ring_queue_pop_head(Head &head, Tail &tail, Count &count, Slot *slot
     const uint32_t idx = ticket & (CAP - 1u);
     Slot &slot = slots[idx];
     slot.seq.store(UB_WAIT_EMPTY, std::memory_order_release);
+    ring_queue_reset_payload(slot);
     head.fetch_add(1u, std::memory_order_release);
-    count.fetch_sub(1u, std::memory_order_acq_rel);
+    ring_queue_try_dec_count(count);
 }
 
 template <uint32_t CAP, typename Slot, typename Head, typename Tail>
