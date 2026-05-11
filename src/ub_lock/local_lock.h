@@ -31,13 +31,6 @@ typedef uint32_t ub_wait_state_t;
 #define UB_WAIT_NOTIFIED ((ub_wait_state_t)3u) /* notified (ready to wake up) */
 #define UB_WAIT_TIMEOUT ((ub_wait_state_t)4u)  /* timed out */
 
-typedef enum {
-    UB_LOCK_S = 0,  /* shared (read) lock */
-    UB_LOCK_SX = 1, /* shared-exclusive (upgrade intent) lock */
-    UB_LOCK_X = 2,  /* exclusive (write) lock */
-    UB_LOCK_I = 3,  /* Invalid lock type */
-} ub_lock_mode_t;   /* Lock mode definition */
-
 struct alignas(16) ub_waiter_t {
     std::atomic<uint32_t> seq; /* seq-based ring state machine */
     ub_lock_mode_t mode;       /* requested lock mode */
@@ -60,7 +53,8 @@ struct alignas(UB_CACHELINE_SIZE) ub_rw_lock {
     std::atomic<uint32_t> sx_recursive;       /* number of recursive sx lock */
     std::atomic<uint32_t> x_recursive;        /* number of recursive x lock */
     std::atomic<int32_t> is_inited;           /* initialization flag */
-    uint8_t _pad_misc[28];                    /* Fill remaining 32 bytes */
+    std::atomic<uint32_t> shared_owner_bitmap; /* bitmap of processes holding s locks */
+    uint8_t _pad_misc[24];                    /* Fill remaining 24 bytes */
 
     ub_waiter_t wait_queue[UB_MAX_NODES];  /* FIFO wait queue */
     uintptr_t node_registry[UB_MAX_NODES]; /* UB lock table */
@@ -232,6 +226,7 @@ public:
 
     std::atomic<ub_lock_mode_t> local_is_reserve_lock{UB_LOCK_I};
     std::atomic<bool> remote_release_in_progress_{false};
+    std::atomic<bool> hold_global{false};
 
     enum GlobalState : int {
         GLOBAL_IDLE = 0,

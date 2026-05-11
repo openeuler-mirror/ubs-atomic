@@ -25,6 +25,12 @@ struct local_msg_body_t {
     ub_lock_mode_t mode;
 };
 
+inline void clear_shared_owner_bitmap(ub_rw_lock_t *lock, uint8_t process_id)
+{
+    uint32_t mask = ~(1u << process_id);
+    lock->shared_owner_bitmap.fetch_and(mask, std::memory_order_acq_rel);
+}
+
 class DistributedLock { // 逻辑封装
 public:
     explicit DistributedLock(ub_rw_lock_t *shm) : rw_lock_shm_(shm) {};
@@ -43,13 +49,17 @@ public:
     ub_lock_result_t unlock_sx(const ub_lock_policy_t &policy, const ub_location_t &location);
     ub_lock_result_t unlock_x(const ub_lock_policy_t &policy, const ub_location_t &location);
     ub_lock_result_t delay_unlock(ub_lock_mode_t mode, uint8_t node_id);
+    ub_lock_result_t recover(const uint32_t process_id, const ub_location_t &location);
+    ub_lock_result_t query_holder(const ub_location_t &location, ub_lock_query_result_t &result);
+    ub_lock_result_t rebuild(ub_rw_lock_t *old_lock, const ub_lock_rebuild_info_t &rebuild_info,
+                             const ub_location_t &location);
 
 private:
     ub_rw_lock_t *rw_lock_shm_; //指向共享内存数据
 
     void wake_after_unlock_exclusive(const ub_location_t &location);
     void dequeue_and_notify_one(const ub_location_t &location);
-    ub_lock_result_t verify_param(const ub_lock_policy_t &policy, const ub_location_t &location);
+    ub_lock_result_t verify_param(const ub_location_t &location);
 
     // 队列管理
     void create_wait_queue();
@@ -57,6 +67,7 @@ private:
     ub_lock_result_t outqueue_waiter(ub_waiter_t *&out_waiter);
     void clean_timeout_waiter(uint32_t ticket); // 清理等待队列中已经超时的 waiter
     void clean_outqueue_waiter(uint32_t ticket);
+    void recover_shared_lock(uint32_t process_id);
     void cleanup_and_unlock_local(LocalLock *local_lock);
     bool try_acquire_global_s(LocalLock *local_lock, bool &is_awakened, uint32_t slot);
     bool peek_head_waiting_mode_clean(ub_lock_mode_t &mode_out);
@@ -72,9 +83,6 @@ private:
     ub_lock_result_t delay_release_local_lock(LocalLock &local_lock, ub_lock_mode_t mode,
                                               const ub_location_t &location);
     ub_lock_result_t delay_release_ub_lock(ub_lock_mode_t mode, LocalLock &local_lock, const ub_location_t &location);
-    ub_lock_result_t local_try_unlock_s(bool allow_delay_release, const ub_location_t &location);
-    ub_lock_result_t local_try_unlock_x(bool allow_recursive, bool allow_delay_release, const ub_location_t &location);
-    ub_lock_result_t local_try_unlock_sx(bool allow_recursive, bool allow_delay_release, const ub_location_t &location);
 };
 
 void message_process_thread_func(const message_t *msg, void *ctx); // 线程处理函数，用于处理消息队列中的消息

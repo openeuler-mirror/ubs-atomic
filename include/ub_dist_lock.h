@@ -30,6 +30,13 @@ typedef uint64_t time_ms_t;
 typedef struct ub_rw_lock ub_rw_lock_t;
 
 typedef enum {
+    UB_LOCK_S = 0,  /* shared (read) lock */
+    UB_LOCK_SX = 1, /* shared-exclusive (upgrade intent) lock */
+    UB_LOCK_X = 2,  /* exclusive (write) lock */
+    UB_LOCK_I = 3,  /* Invalid lock type */
+} ub_lock_mode_t;   /* Lock mode definition */
+
+typedef enum {
     UB_LOCK_SUCCESS = 0,  /* operation succeeded */
     UB_LOCK_TIMEOUT = 1,  /* lock timeout */
     UB_LOCK_CONFLICT = 2, /* lock conflict */
@@ -51,6 +58,19 @@ typedef struct {
     time_ms_t lease_time;        /* lease duration for distributed lock, default value:60000 */
     time_ms_t heartbeat_timeout; /* heartbeat timeout threshold, default value:500 */
 } ub_lock_config_t;              /* Configuration fixed at lock creation time */
+
+typedef struct {
+    uint8_t node_id;          /* queried node id */
+    ub_lock_mode_t held_mode; /* recoverable holder mode on this node */
+    int32_t holder_tid;       /* valid for X/SX, otherwise 0 */
+    uint32_t recursive_count; /* valid for X/SX, otherwise 0 */
+    ub_lock_mode_t reserve_mode; /* delayed-release mode on this node, otherwise UB_LOCK_I */
+} ub_lock_query_result_t;     /* Minimal local snapshot used for rebuild */
+
+typedef struct {
+    const ub_lock_query_result_t *query_results; /* one result per queried node */
+    uint32_t query_result_count;                 /* number of elements in query_results */
+} ub_lock_rebuild_info_t;                      /* Aggregated cluster result for rebuild */
 
 /* ============================================================
  * C ABI APIs
@@ -125,6 +145,37 @@ ub_lock_result_t ub_rw_lock_x_unlock(ub_rw_lock_t *lock, const ub_lock_policy_t 
  */
 ub_lock_result_t ub_rw_lock_sx_unlock(ub_rw_lock_t *lock, const ub_lock_policy_t *policy,
                                       const ub_location_t *location);
+
+/*
+ * @brief recover a lock held by a failed process.
+ * @param[in] lock         : pointer to shared-memory lock object
+ * @param[in] process_id   : process id
+ * @param[in] location     : caller location (node/thread)
+ * @return lock result status(UB_LOCK_SUCCESS/UB_LOCK_ERROR)
+ */
+ub_lock_result_t ub_rw_lock_recover(ub_rw_lock_t *lock, const uint32_t process_id, const ub_location_t *location);
+
+/*
+ * @brief query the minimal local holder state needed for rebuild.
+ * @param[in] lock       : pointer to shared-memory lock object
+ * @param[in] location   : caller location (node/thread)
+ * @param[out] result    : normalized local holder snapshot
+ * @return lock result status(UB_LOCK_SUCCESS/UB_LOCK_ERROR)
+ */
+ub_lock_result_t ub_rw_lock_query_holder(ub_rw_lock_t *lock, const ub_location_t *location,
+                                         ub_lock_query_result_t *result);
+
+/*
+ * @brief rebuild new shared-memory lock state from aggregated node query results.
+ * @param[in] old_lock       : pointer to old shared-memory lock object used by local registry
+ * @param[in] new_lock       : pointer to new shared-memory lock object
+ * @param[in] rebuild_info   : aggregated query results from the cluster
+ * @param[in] location       : caller location (node/thread)
+ * @return lock result status(UB_LOCK_SUCCESS/UB_LOCK_ERROR)
+ */
+ub_lock_result_t ub_rw_lock_rebuild(ub_rw_lock_t *old_lock, ub_rw_lock_t *new_lock,
+                                    const ub_lock_rebuild_info_t *rebuild_info, const ub_location_t *location);
+
 
 #ifndef UB_ATOMIC_LOG_FUNC_TYPEDEF
 #define UB_ATOMIC_LOG_FUNC_TYPEDEF
