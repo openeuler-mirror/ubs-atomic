@@ -10,6 +10,7 @@
 #include "ub_atomic_log_print.h"
 #include "ub_dist_comm_queue.h"
 #include "ub_dist_lock.h"
+
 namespace ublock {
 
 typedef enum {
@@ -69,20 +70,28 @@ private:
     void clean_outqueue_waiter(uint32_t ticket);
     void recover_shared_lock(uint32_t process_id);
     void cleanup_and_unlock_local(LocalLock *local_lock);
-    bool try_acquire_global_s(LocalLock *local_lock, bool &is_awakened, uint32_t slot);
     bool peek_head_waiting_mode_clean(ub_lock_mode_t &mode_out);
 
     // 消息管理
-    ub_lock_result_t notify_waiters(ub_waiter_t &waiter, const ub_location_t &location); // 消息通知唤醒
-    ub_lock_result_t notify_unlock(const ub_location_t &location, uint8_t node_id,
-                                   const local_msg_body_t &msg_body); // 消息通知释放锁
-    message_t *create_message(const ub_location_t &location, uint8_t node_id,
-                              const local_msg_body_t &msg_body); // 构造消息结构体
+    ub_lock_result_t notify_waiters(ub_waiter_t &waiter, const ub_location_t &location);
+    ub_lock_result_t notify_unlock(const ub_location_t &location, uint8_t node_id, const local_msg_body_t &msg_body);
+    message_t *create_message(const ub_location_t &location, uint8_t node_id, const local_msg_body_t &msg_body);
 
     // 锁优化（本地锁降级+延迟释放）
-    ub_lock_result_t delay_release_local_lock(LocalLock &local_lock, ub_lock_mode_t mode,
-                                              const ub_location_t &location);
+    ub_lock_result_t delay_release_local_lock(LocalLock &local_lock, ub_lock_mode_t mode, const ub_location_t &location);
     ub_lock_result_t delay_release_ub_lock(ub_lock_mode_t mode, LocalLock &local_lock, const ub_location_t &location);
+
+    void wake_s_chain(const ub_location_t &location);
+    void wake_sx_chain(const ub_location_t &location);
+
+    bool wait_follower_s(LocalLock *local_lock, const steady_time_point &deadline);
+    ub_lock_result_t spin_wait_s_loop(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline);
+    ub_lock_result_t spin_wait_x_loop(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline, bool is_recursive);
+    ub_lock_result_t spin_wait_sx_loop(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline, bool is_recursive);
+
+    void recover_exclusive_x(uint32_t process_id);
+    void recover_exclusive_sx(uint32_t process_id);
+    void recover_shared_sx_s(uint32_t process_id);
 };
 
 void message_process_thread_func(const message_t *msg, void *ctx); // 线程处理函数，用于处理消息队列中的消息
