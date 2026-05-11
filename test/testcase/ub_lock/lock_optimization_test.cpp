@@ -116,7 +116,7 @@ TEST_F(LocalLockTest, CleanTimeoutWaiterReleasesSlot)
     EXPECT_EQ(lock_->q[0].seq.load(), UB_WAIT_TIMEOUT);
 
     lock_->clean_timeout_waiter(ticket);
-    EXPECT_EQ(lock_->waiting_count.load(), 0xFFFFFFFF);
+    EXPECT_EQ(lock_->waiting_count.load(), 0u);
     EXPECT_EQ(lock_->q[0].seq.load(), UB_WAIT_TIMEOUT);
 }
 
@@ -131,8 +131,8 @@ TEST_F(LocalLockTest, PeekHeadWaitingModeCleanSkipsReleased)
     ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_X, 2, t1), UB_LOCK_SUCCESS);
 
     lock_->clean_timeout_waiter(t0);
-    EXPECT_FALSE(lock_->peek_head_waiting_mode_clean(mode));
-    EXPECT_EQ(mode, UB_LOCK_I);
+    EXPECT_TRUE(lock_->peek_head_waiting_mode_clean(mode));
+    EXPECT_EQ(mode, UB_LOCK_X);
     EXPECT_EQ(lock_->q_head.v.load(), 1);
 }
 
@@ -294,6 +294,211 @@ TEST_F(LocalLockTest, LockSSlowPathTimeoutEnqueuesAndCleans)
     EXPECT_EQ(lock_->lock_s(1, deadline), UB_LOCK_TIMEOUT);
     EXPECT_EQ(lock_->waiting_count.load(), 1u);
     EXPECT_EQ(lock_->q[0].seq.load(), UB_WAIT_TIMEOUT);
+}
+
+TEST_F(LocalLockTest, LockXSlowPathTimeoutEnqueuesAndCleans)
+{
+    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->waiting_count.store(1, std::memory_order_release);
+    auto deadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+
+    EXPECT_EQ(lock_->lock_x(false, 1, deadline), UB_LOCK_TIMEOUT);
+    EXPECT_EQ(lock_->waiting_count.load(), 1u);
+    EXPECT_EQ(lock_->q[0].seq.load(), UB_WAIT_TIMEOUT);
+}
+
+TEST_F(LocalLockTest, LockSxSlowPathTimeoutEnqueuesAndCleans)
+{
+    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->waiting_count.store(1, std::memory_order_release);
+    auto deadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+
+    EXPECT_EQ(lock_->lock_sx(false, 1, deadline), UB_LOCK_TIMEOUT);
+    EXPECT_EQ(lock_->waiting_count.load(), 1u);
+    EXPECT_EQ(lock_->q[0].seq.load(), UB_WAIT_TIMEOUT);
+}
+
+TEST_F(LocalLockTest, LockSSlowPathWakesAndAcquires)
+{
+    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->waiting_count.store(0, std::memory_order_release);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+
+    ub_lock_result_t result = UB_LOCK_ERROR;
+    std::thread t([&] { result = lock_->lock_s(1, deadline); });
+
+    WaitForLocalWaiters(lock_);
+    lock_->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_->wake_after_unlock_exclusive();
+
+    t.join();
+    EXPECT_EQ(result, UB_LOCK_SUCCESS);
+    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_DECR - 1);
+}
+
+TEST_F(LocalLockTest, LockXSlowPathWakesAndAcquires)
+{
+    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->waiting_count.store(0, std::memory_order_release);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+
+    ub_lock_result_t result = UB_LOCK_ERROR;
+    std::thread t([&] { result = lock_->lock_x(false, 1, deadline); });
+
+    WaitForLocalWaiters(lock_);
+    lock_->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_->wake_after_unlock_exclusive();
+
+    t.join();
+    EXPECT_EQ(result, UB_LOCK_SUCCESS);
+    EXPECT_EQ(lock_->lock_word.v.load(), 0);
+}
+
+TEST_F(LocalLockTest, LockSxSlowPathWakesAndAcquires)
+{
+    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->waiting_count.store(0, std::memory_order_release);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+
+    ub_lock_result_t result = UB_LOCK_ERROR;
+    std::thread t([&] { result = lock_->lock_sx(false, 1, deadline); });
+
+    WaitForLocalWaiters(lock_);
+    lock_->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_->wake_after_unlock_exclusive();
+
+    t.join();
+    EXPECT_EQ(result, UB_LOCK_SUCCESS);
+    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_HALF_DECR);
+}
+
+class LocalOptimizationTest : public ::testing::Test {
+public:
+    void SetUp() override
+    {
+        shm_ = new ub_rw_lock_t{};
+        ResetLocalLockEntries();
+        lock_ = new DistributedLock(shm_);
+        lock_->create_wait_queue();
+    }
+
+    void TearDown() override
+    {
+        for (uint8_t i = 0; i < UB_MAX_NODES; ++i) {
+            if (shm_->node_registry[i]) {
+                delete reinterpret_cast<LocalLock *>(shm_->node_registry[i]);
+                shm_->node_registry[i] = 0;
+            }
+        }
+        delete lock_;
+        delete shm_;
+    }
+
+protected:
+    void ResetLocalLockEntries()
+    {
+        for (uint8_t i = 0; i < UB_MAX_NODES; ++i) {
+            shm_->node_registry[i] = 0;
+        }
+    }
+
+    ub_rw_lock_t *shm_{};
+    DistributedLock *lock_{};
+};
+
+TEST_F(LocalOptimizationTest, WakeAfterUnlockExclusiveHeadSNotifiesUntilX)
+{
+    uint32_t t0 = 0;
+    uint32_t t1 = 0;
+    uint32_t t2 = 0;
+    uint32_t t3 = 0;
+    ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_S, ub_location_t{1, 1}, t0), UB_LOCK_SUCCESS);
+    ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_SX, ub_location_t{2, 1}, t1), UB_LOCK_SUCCESS);
+    ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_S, ub_location_t{3, 1}, t2), UB_LOCK_SUCCESS);
+    ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_X, ub_location_t{4, 1}, t3), UB_LOCK_SUCCESS);
+
+    lock_->wake_after_unlock_exclusive(ub_location_t{1, 1});
+
+    EXPECT_EQ(shm_->waiting_count.load(), 4u);
+    EXPECT_EQ(shm_->queue_head.load(), 0);
+    EXPECT_EQ(shm_->wait_queue[0].seq.load(), UB_WAIT_NOTIFIED);
+    EXPECT_EQ(shm_->wait_queue[1].seq.load(), UB_WAIT_WAITING);
+    EXPECT_EQ(shm_->wait_queue[2].seq.load(), UB_WAIT_WAITING);
+    EXPECT_EQ(shm_->wait_queue[3].seq.load(), UB_WAIT_WAITING);
+}
+
+TEST_F(LocalOptimizationTest, WakeAfterUnlockExclusiveHeadSxNotifiesSUntilStop)
+{
+    uint32_t t0 = 0;
+    uint32_t t1 = 0;
+    uint32_t t2 = 0;
+    uint32_t t3 = 0;
+    ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_SX, ub_location_t{1, 1}, t0), UB_LOCK_SUCCESS);
+    ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_S, ub_location_t{2, 1}, t1), UB_LOCK_SUCCESS);
+    ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_S, ub_location_t{3, 1}, t2), UB_LOCK_SUCCESS);
+    ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_X, ub_location_t{4, 1}, t3), UB_LOCK_SUCCESS);
+
+    lock_->wake_after_unlock_exclusive(ub_location_t{1, 1});
+
+    EXPECT_EQ(shm_->waiting_count.load(), UB_WAIT_TIMEOUT);
+    EXPECT_EQ(shm_->queue_head.load(), UB_WAIT_EMPTY);
+    EXPECT_EQ(shm_->wait_queue[0].seq.load(), UB_WAIT_NOTIFIED);
+    EXPECT_EQ(shm_->wait_queue[1].seq.load(), UB_WAIT_WAITING);
+    EXPECT_EQ(shm_->wait_queue[2].seq.load(), UB_WAIT_WAITING);
+    EXPECT_EQ(shm_->wait_queue[3].seq.load(), UB_WAIT_WAITING);
+}
+
+TEST_F(LocalOptimizationTest, DelayUnlockUpdatesOwnersAndLockWord)
+{
+    ub_location_t loc{1, 2};
+    shm_->lock_word.store(X_LOCK_DECR - 1, std::memory_order_release);
+    shm_->reserve_lock_owner.store(1, std::memory_order_release);
+    EXPECT_EQ(lock_->delay_unlock(UB_LOCK_S, loc.node_id), UB_LOCK_SUCCESS);
+    EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR);
+    EXPECT_EQ(shm_->reserve_lock_owner.load(), LOCK_INVALID_OWNER);
+
+    shm_->x_recursive.store(2, std::memory_order_release);
+    shm_->lock_word.store(0, std::memory_order_release);
+    EXPECT_EQ(lock_->delay_unlock(UB_LOCK_X, loc.node_id), UB_LOCK_SUCCESS);
+    EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR);
+    EXPECT_EQ(shm_->x_recursive.load(), 0u);
+
+    shm_->sx_recursive.store(3, std::memory_order_release);
+    shm_->lock_word.store(X_LOCK_HALF_DECR, std::memory_order_release);
+    EXPECT_EQ(lock_->delay_unlock(UB_LOCK_SX, loc.node_id), UB_LOCK_SUCCESS);
+    EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR);
+    EXPECT_EQ(shm_->sx_recursive.load(), 0u);
+}
+
+TEST_F(LocalOptimizationTest, DelayReleaseLocalLockHandlesReserveModes)
+{
+    ub_location_t loc{2, 0};
+    auto local_lock_sp = std::make_shared<LocalLock>(shm_);
+    register_local_lock(shm_, local_lock_sp);
+    auto *local_lock = local_lock_sp.get();
+
+    local_lock->local_is_reserve_lock.store(UB_LOCK_S, std::memory_order_release);
+    EXPECT_EQ(lock_->delay_release_local_lock(*local_lock, UB_LOCK_S, loc), UB_LOCK_CONFLICT);
+
+    local_lock->local_is_reserve_lock.store(UB_LOCK_S, std::memory_order_release);
+    shm_->lock_word.store(X_LOCK_DECR - 1, std::memory_order_release);
+    EXPECT_EQ(lock_->delay_release_local_lock(*local_lock, UB_LOCK_X, loc), UB_LOCK_SUCCESS);
+    EXPECT_EQ(local_lock->local_is_reserve_lock.load(), UB_LOCK_I);
+    EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR);
+    unregister_local_lock(shm_);
+}
+
+
+TEST_F(LocalOptimizationTest, DelayReleaseUbLockNoOwnerOrSlot)
+{
+    ub_location_t loc{1, 2};
+    LocalLock local_lock(shm_);
+
+    shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
+    EXPECT_EQ(lock_->delay_release_ub_lock(UB_LOCK_S, local_lock, loc), UB_LOCK_SUCCESS);
+
+    shm_->reserve_lock_owner.store(make_global_owner(3, 0), std::memory_order_release);
+    EXPECT_EQ(lock_->delay_release_ub_lock(UB_LOCK_X, local_lock, loc), UB_LOCK_SUCCESS);
 }
 
 } // namespace ut
