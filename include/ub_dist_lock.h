@@ -194,6 +194,13 @@ typedef int (*ub_atomic_log_func)(int level, const char *file, const char *func,
 * @param func [in] : user-defined log function pointer
 */
 void ub_atomic_register_log_func(ub_atomic_log_func func);
+
+/*
+* @brief set log level threshold
+* @param level [in] : log level threshold (LOG_LEVEL_DEBUG ~ LOG_LEVEL_CRITICAL)
+* @return 0 on success, -1 on invalid level
+*/
+int ub_atomic_set_log_level(int level);
 #endif
 #ifdef __cplusplus
 } /* extern "C" */
