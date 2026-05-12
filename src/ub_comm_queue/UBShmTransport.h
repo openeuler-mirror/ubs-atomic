@@ -33,6 +33,8 @@ constexpr uint8_t MSG_TYPE_DIST_LOCK = 0xFF;
 
 // 遗言消息类型
 constexpr uint8_t MSG_TYPE_SYS_PEER_EXIT = 0xFE;
+// 流控配置更新消息类型
+constexpr uint8_t MSG_TYPE_SYS_FLOW_CONFIG_UPDATE = 0xFD;
 
 // 工作线程池占总cpu比例
 constexpr double WORKER_POOL_RATIO = 0.2;
@@ -108,6 +110,8 @@ public:
     int set_congestion_threshold(uint8_t priority, uint32_t congestion_threshold_percent);
 
     void remove_node_cache(uint32_t node_id);
+    void update_cached_congestion_threshold(uint32_t node_id, uint8_t priority, uint32_t threshold, uint64_t version);
+
 
     // 锁实例相关
     bool get_is_for_lock() const;
@@ -167,6 +171,8 @@ private:
 
     // 去初始化：伪造满 -> 清公告牌 -> 广播删除消息 -> 删缓存
     void deinit_and_broadcast();
+    void broadcast_flow_config_update(uint8_t priority, uint32_t threshold, uint64_t version);
+
 
 private:
     uint64_t instance_id_;
