@@ -99,7 +99,7 @@ public:
     int configure_congestion_threshold(uint32_t congestion_threshold_percent);
 
     // 返回本地估计的状态快照，不加锁，适合维测路径调用。
-    void get_status(ub_comm_queue_status_t *status) const;
+    void get_status(ub_comm_queue_status_t *status);
 
 private:
     struct Entry; // 前置声明

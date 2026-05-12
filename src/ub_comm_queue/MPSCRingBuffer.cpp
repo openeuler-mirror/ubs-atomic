@@ -286,12 +286,13 @@ int MPSCRingBuffer::configure_congestion_threshold(uint32_t congestion_threshold
     return UB_COMM_OK;
 }
 
-void MPSCRingBuffer::get_status(ub_comm_queue_status_t *status) const
+void MPSCRingBuffer::get_status(ub_comm_queue_status_t *status)
 {
     if (status == nullptr) {
         return;
     }
     uint64_t used = approximate_used();
+    record_depth(used);
     status->used = used;
     status->total = entry_num_;
     status->free = (used >= entry_num_) ? 0 : (entry_num_ - used);
@@ -305,7 +306,7 @@ void MPSCRingBuffer::get_status(ub_comm_queue_status_t *status) const
 #endif
     if (used >= entry_num_) {
         status->state = UB_COMM_QUEUE_FULL;
-    } else if (status->congestion_threshold == 0 || congested_.load(std::memory_order_acquire) != 0) {
+    } else if (status->congestion_threshold == 0 || used >= status->congestion_threshold) {
         status->state = UB_COMM_QUEUE_CONGESTED;
     } else if (used == 0) {
         status->state = UB_COMM_QUEUE_IDLE;
