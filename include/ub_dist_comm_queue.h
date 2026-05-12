@@ -153,7 +153,7 @@ int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t pri
  * producers observe the new watermark through the shared ring object after the
  * target node applies this configuration.
  * @param handle [in]   : pointer to ub share memory communication instance handle
- * @param priority [in] : local ring priority
+ * @param priority [in] : local ring priority. Priority 0 is reserved and cannot be configured.
  * @param congestion_threshold_percent [in] : congestion threshold percentage, 0~100.
  *                                           0 means every non-full state is congested.
  * @return 0 on success, negative error code on failure
