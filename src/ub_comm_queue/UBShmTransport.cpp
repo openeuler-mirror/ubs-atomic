@@ -995,7 +995,8 @@ int UBShmTransport::get_status(uint8_t node_id, uint8_t priority, ub_comm_queue_
 
 int UBShmTransport::set_congestion_threshold(uint8_t priority, uint32_t congestion_threshold_percent)
 {
-    if (priority >= MAX_PRIORITY_LEVELS) {
+    if (priority == LOCK_RING_PRIORITY || priority >= MAX_PRIORITY_LEVELS) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid priority %u", priority);
         return -EINVAL;
     }
     MPSCRingBuffer *ring = local_rings_[priority];
