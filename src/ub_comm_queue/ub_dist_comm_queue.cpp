@@ -95,6 +95,10 @@ int ub_comm_queue_send(ub_shm_comm_t *handle, const message_t *msg)
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Peer exit message is not supported.");
         return -EOPNOTSUPP;
     }
+    if (msg->header.msg_type == ub_comm_queue::MSG_TYPE_SYS_FLOW_CONFIG_UPDATE) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Flow config update message is not supported.");
+        return -EOPNOTSUPP;
+    }
 
     UBShmTransport *tspt = static_cast<UBShmTransport *>(*handle);
     return tspt->send(msg);

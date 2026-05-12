@@ -84,6 +84,31 @@ static uint64_t generate_instance_id()
     return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 }
 
+struct FlowConfigUpdateMessage {
+    uint64_t version;
+    uint32_t threshold;
+    uint8_t priority;
+    uint8_t reserved[3];
+};
+static_assert(sizeof(FlowConfigUpdateMessage) <= LOCK_RING_MSG_SIZE - sizeof(message_header_t),
+              "Flow config update body is too large for lock ring");
+
+
+
+
+void on_flow_config_update(const message_t *msg, void *ctx)
+{
+    if (msg == nullptr || ctx == nullptr || msg->body == nullptr ||
+        msg->header.body_length < sizeof(FlowConfigUpdateMessage)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid flow config update message.");
+        return;
+    }
+
+    auto *self = static_cast<UBShmTransport *>(ctx);
+    auto *body = reinterpret_cast<const FlowConfigUpdateMessage *>(msg->body);
+    self->update_cached_congestion_threshold(msg->header.src_node_id, body->priority, body->threshold, body->version);
+}
+
 // 回调实现
 void on_peer_exit(const message_t *msg, void *ctx)
 {
@@ -105,9 +130,38 @@ void UBShmTransport::remove_node_cache(uint32_t node_id)
         int32_t idx = get_compact_index(node_id);
         cache.raw_ptr = nullptr;
         cache.shadow_head.store(0, std::memory_order_relaxed);
+        cache.cached_threshold.store(0, std::memory_order_relaxed);
+        cache.cached_threshold_version.store(0, std::memory_order_relaxed);
         cache.initialized.store(false, std::memory_order_release);
         remote_lookup_table_[idx][p] = nullptr;
     }
+}
+
+
+void UBShmTransport::update_cached_congestion_threshold(uint32_t node_id, uint8_t priority, uint32_t threshold,
+                                                        uint64_t version)
+{
+    if (priority == LOCK_RING_PRIORITY || priority >= MAX_PRIORITY_LEVELS) {
+        ATOMIC_LOG(LOG_LEVEL_WARN, "Ignore invalid flow config update, node=%u priority=%u", node_id, priority);
+        return;
+    }
+    if (get_compact_index(node_id) < 0) {
+        ATOMIC_LOG(LOG_LEVEL_WARN, "Ignore flow config update from unknown node=%u", node_id);
+        return;
+    }
+
+    std::unique_lock<std::shared_mutex> lock(cache_mutex_);
+    auto &cache = ring_caches_[node_id][priority];
+    uint64_t cached_version = cache.cached_threshold_version.load(std::memory_order_relaxed);
+    if (version <= cached_version) {
+        return;
+    }
+
+    cache.cached_threshold.store(threshold, std::memory_order_relaxed);
+    cache.cached_threshold_version.store(version, std::memory_order_release);
+    ATOMIC_LOG(LOG_LEVEL_INFO,
+               "Updated cached flow threshold from control message, node=%u priority=%u threshold=%u version=%llu",
+               node_id, priority, threshold, version);
 }
 
 // =========================================================
@@ -157,6 +211,7 @@ int UBShmTransport::init(const ub_shm_area_t *init_area, const ub_ring_region_ma
         return ret;
     }
     register_func(MSG_TYPE_SYS_PEER_EXIT, UB_FUNC_SYNC, on_peer_exit, this);
+    register_func(MSG_TYPE_SYS_FLOW_CONFIG_UPDATE, UB_FUNC_SYNC, on_flow_config_update, this);
 
     // 9. 等待集群就绪
     wait_for_cluster_ready();
@@ -752,7 +807,8 @@ int UBShmTransport::send(const message_t *msg)
 
     // 锁消息判断
     uint32_t prio;
-    if (msg->header.msg_type == MSG_TYPE_DIST_LOCK || msg->header.msg_type == MSG_TYPE_SYS_PEER_EXIT) {
+    if (msg->header.msg_type == MSG_TYPE_DIST_LOCK || msg->header.msg_type == MSG_TYPE_SYS_PEER_EXIT ||
+        msg->header.msg_type == MSG_TYPE_SYS_FLOW_CONFIG_UPDATE) {
         prio = LOCK_RING_PRIORITY;
     } else {
         prio = msg->header.priority;
@@ -1003,7 +1059,46 @@ int UBShmTransport::set_congestion_threshold(uint8_t priority, uint32_t congesti
     if (ring == nullptr) {
         return UB_COMM_ERR_RING_NOT_FOUND;
     }
-    return ring->configure_congestion_threshold(congestion_threshold_percent);
+    int ret = ring->configure_congestion_threshold(congestion_threshold_percent);
+    if (ret != UB_COMM_OK) {
+        return ret;
+    }
+
+    broadcast_flow_config_update(priority, ring->get_congestion_threshold(), ring->get_congestion_threshold_version());
+    return UB_COMM_OK;
+}
+
+void UBShmTransport::broadcast_flow_config_update(uint8_t priority, uint32_t threshold, uint64_t version)
+{
+    if (!init_complete_ || remote_lookup_table_.empty()) {
+        return;
+    }
+
+    FlowConfigUpdateMessage body{};
+    body.threshold = threshold;
+    body.version = version;
+    body.priority = priority;
+
+    message_t msg{};
+    msg.header.msg_type = MSG_TYPE_SYS_FLOW_CONFIG_UPDATE;
+    msg.header.src_node_id = conf_.current_node_id;
+    msg.header.body_length = sizeof(body);
+    msg.header.priority = LOCK_RING_PRIORITY;
+    msg.body = reinterpret_cast<char *>(&body);
+
+    for (uint32_t idx = 0; idx < idx_to_node_id_.size(); ++idx) {
+        uint32_t node_id = idx_to_node_id_[idx];
+        if (node_id == conf_.current_node_id) {
+            continue;
+        }
+        msg.header.dest_node_id = static_cast<uint8_t>(node_id);
+        int ret = send(&msg);
+        if (ret < 0) {
+            ATOMIC_LOG(LOG_LEVEL_WARN,
+                       "Failed to broadcast flow config update, dest=%u priority=%u threshold=%u version=%llu ret=%d",
+                       node_id, priority, threshold, version, ret);
+        }
+    }
 }
 
 bool UBShmTransport::get_is_for_lock() const
