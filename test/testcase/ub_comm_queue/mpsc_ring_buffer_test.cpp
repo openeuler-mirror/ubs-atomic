@@ -6,7 +6,9 @@
 
 #include "gtest/gtest.h"
 
+#define private public
 #include "MPSCRingBuffer.h"
+#undef private
 
 namespace ub_comm_queue {
 namespace ut {
@@ -93,6 +95,24 @@ TEST(MPSCRingBufferTest, EnqueueLocalAndDequeuePreserveHeaderAndBody)
     EXPECT_EQ(ring->dequeue(out.data(), out.size()), 0u);
 }
 
+TEST(MPSCRingBufferTest, EnqueueLocalWithEmptyBodyCopiesOnlyHeader)
+{
+    constexpr uint32_t capacity = 4;
+    constexpr uint32_t maxMsgSize = 128;
+    auto mem = AllocRingMemory(capacity, maxMsgSize);
+    ASSERT_NE(mem, nullptr);
+    auto *ring = ConstructRing(mem.get(), capacity, maxMsgSize);
+
+    message_header_t hdr = MakeHeader(0);
+    EXPECT_EQ(ring->enqueue_local(&hdr, nullptr, 0), UB_COMM_OK);
+
+    std::vector<char> out(maxMsgSize);
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t));
+    auto *outHdr = reinterpret_cast<message_header_t *>(out.data());
+    EXPECT_EQ(outHdr->body_length, 0u);
+    EXPECT_EQ(outHdr->msg_type, hdr.msg_type);
+}
+
 TEST(MPSCRingBufferTest, EnqueueRejectsOversizedMessageAndReportsFull)
 {
     constexpr uint32_t capacity = 2;
@@ -153,6 +173,31 @@ TEST(MPSCRingBufferTest, CongestionThresholdAffectsStatusAndReturnValue)
     EXPECT_EQ(status.state, UB_COMM_QUEUE_CONGESTED);
 }
 
+TEST(MPSCRingBufferTest, StatusNullNormalAndTruncatedDequeue)
+{
+    constexpr uint32_t capacity = 4;
+    constexpr uint32_t maxMsgSize = 128;
+    auto mem = AllocRingMemory(capacity, maxMsgSize);
+    ASSERT_NE(mem, nullptr);
+    auto *ring = ConstructRing(mem.get(), capacity, maxMsgSize);
+
+    ring->get_status(nullptr);
+
+    const char body[] = "truncate-me";
+    message_header_t hdr = MakeHeader(sizeof(body));
+    ASSERT_EQ(ring->enqueue_local(&hdr, body, sizeof(body)), UB_COMM_OK);
+
+    ub_comm_queue_status_t status{};
+    ring->get_status(&status);
+    EXPECT_EQ(status.used, 1u);
+    EXPECT_EQ(status.state, UB_COMM_QUEUE_NORMAL);
+
+    char small[sizeof(message_header_t)] = {};
+    EXPECT_EQ(ring->dequeue(small, sizeof(small)), sizeof(small));
+    auto *outHdr = reinterpret_cast<message_header_t *>(small);
+    EXPECT_EQ(outHdr->body_length, sizeof(body));
+}
+
 TEST(MPSCRingBufferTest, EnqueueRemoteUsesCachedMetadata)
 {
     constexpr uint32_t capacity = 4;
@@ -177,6 +222,88 @@ TEST(MPSCRingBufferTest, EnqueueRemoteUsesCachedMetadata)
     std::vector<char> out(maxMsgSize);
     ASSERT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t) + sizeof(body));
     EXPECT_EQ(std::memcmp(out.data() + sizeof(message_header_t), body, sizeof(body)), 0);
+}
+
+TEST(MPSCRingBufferTest, EnqueueRemoteEmptyBodyAndFullPaths)
+{
+    constexpr uint32_t capacity = 2;
+    constexpr uint32_t maxMsgSize = 128;
+    auto mem = AllocRingMemory(capacity, maxMsgSize);
+    ASSERT_NE(mem, nullptr);
+    auto *ring = ConstructRing(mem.get(), capacity, maxMsgSize);
+
+    std::atomic<uint64_t> shadowHead{0};
+    std::atomic<uint32_t> cachedThreshold{0};
+    std::atomic<uint64_t> cachedThresholdVersion{0};
+    message_header_t hdr = MakeHeader(0);
+
+    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
+                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
+                                             cachedThreshold, cachedThresholdVersion),
+              UB_COMM_OK);
+    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
+                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
+                                             cachedThreshold, cachedThresholdVersion),
+              UB_COMM_SEND_CONGESTED);
+    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
+                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
+                                             cachedThreshold, cachedThresholdVersion),
+              UB_COMM_ERR_RING_FULL);
+
+    std::vector<char> out(maxMsgSize);
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t));
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t));
+}
+
+TEST(MPSCRingBufferTest, RemoteCachedThresholdZeroAndRefreshPaths)
+{
+    constexpr uint32_t capacity = 4;
+    constexpr uint32_t maxMsgSize = 128;
+    auto mem = AllocRingMemory(capacity, maxMsgSize);
+    ASSERT_NE(mem, nullptr);
+    auto *ring = ConstructRing(mem.get(), capacity, maxMsgSize);
+
+    std::atomic<uint64_t> shadowHead{0};
+    std::atomic<uint32_t> cachedThreshold{0};
+    std::atomic<uint64_t> cachedThresholdVersion{ring->get_congestion_threshold_version()};
+    message_header_t hdr = MakeHeader(0);
+
+    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
+                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
+                                             cachedThreshold, cachedThresholdVersion),
+              UB_COMM_SEND_CONGESTED);
+
+    std::vector<char> out(maxMsgSize);
+    ASSERT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t));
+
+    ASSERT_EQ(ring->configure_congestion_threshold(100), UB_COMM_OK);
+    cachedThreshold.store(1, std::memory_order_relaxed);
+    cachedThresholdVersion.store(0, std::memory_order_relaxed);
+    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
+                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
+                                             cachedThreshold, cachedThresholdVersion),
+              UB_COMM_OK);
+    EXPECT_EQ(cachedThreshold.load(std::memory_order_relaxed), ring->get_congestion_threshold());
+    EXPECT_EQ(cachedThresholdVersion.load(std::memory_order_relaxed), ring->get_congestion_threshold_version());
+}
+
+TEST(MPSCRingBufferTest, TriggerForceFullMakesNextProducerFail)
+{
+    constexpr uint32_t capacity = 4;
+    constexpr uint32_t maxMsgSize = 128;
+    auto mem = AllocRingMemory(capacity, maxMsgSize);
+    ASSERT_NE(mem, nullptr);
+    auto *ring = ConstructRing(mem.get(), capacity, maxMsgSize);
+
+    ring->trigger_force_full();
+    EXPECT_EQ(ring->head_.load(std::memory_order_acquire), 0ULL - capacity);
+}
+
+TEST(MPSCRingBufferTest, InvalidCapacityAborts)
+{
+    auto mem = AllocRingMemory(3, 128);
+    ASSERT_NE(mem, nullptr);
+    EXPECT_DEATH({ ConstructRing(mem.get(), 3, 128); }, ".*");
 }
 
 } // namespace ut
