@@ -11,8 +11,6 @@ remove_static()
     find ${dir} -type f -name "*.cpp" | xargs -i sed -i "s/\bstatic\b//g" {}
 }
 
-remove_static ${code_dir}/src/smap
-
 build_dir=build
 
 cd ${code_dir}/test
