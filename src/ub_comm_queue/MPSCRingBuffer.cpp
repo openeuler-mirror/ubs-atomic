@@ -16,10 +16,13 @@ static constexpr int MAX_CAS_RETRIES = 1000;
 // Defaults keep flow-control enabled without requiring old callers to set the new config fields.
 static constexpr uint32_t DEFAULT_CONGESTION_THRESHOLD_PERCENT = 80;
 static constexpr uint64_t FLOW_CONFIG_REFRESH_INTERVAL = 1024;
+static constexpr uint64_t DEFAULT_HALF_WRITE_TIMEOUT_US = 5000000ULL;
 
 struct MPSCRingBuffer::Entry {
     std::atomic<uint8_t> is_ready; // 1: readable, 0: empty
-    uint8_t padding[3];            // Align to 8 bytes roughly
+    uint8_t padding[7];            // Align reservation metadata to 8 bytes
+    std::atomic<uint64_t> reserve_seq;
+    std::atomic<uint64_t> reserve_ts_us;
     uint8_t data[];                // Flexible array member
 };
 
@@ -60,7 +63,8 @@ MPSCRingBuffer::MPSCRingBuffer(uint8_t *buffer_start, uint32_t capacity, uint32_
       congestion_threshold_(calculate_flow_threshold(capacity, DEFAULT_CONGESTION_THRESHOLD_PERCENT)),
       congestion_threshold_version_(1),
       congested_(0),
-      max_depth_(0)
+      max_depth_(0),
+      half_write_timeout_us_(DEFAULT_HALF_WRITE_TIMEOUT_US)
 #ifdef UB_COMM_QUEUE_ENABLE_DEBUG_STATS
       ,
       full_fail_count_(0),
@@ -85,6 +89,8 @@ MPSCRingBuffer::MPSCRingBuffer(uint8_t *buffer_start, uint32_t capacity, uint32_
     for (uint32_t i = 0; i < capacity; i++) {
         Entry *entry = get_entry(i);
         entry->is_ready.store(0, std::memory_order_relaxed);
+        entry->reserve_seq.store(0, std::memory_order_relaxed);
+        entry->reserve_ts_us.store(0, std::memory_order_relaxed);
     }
 
     // 确保初始化写入内存 (ARM Store Barrier)
@@ -209,6 +215,45 @@ uint64_t MPSCRingBuffer::approximate_used() const
     uint64_t head = head_.load(std::memory_order_acquire);
     uint64_t used = tail >= head ? (tail - head) : 0;
     return used > entry_num_ ? entry_num_ : used;
+}
+
+void MPSCRingBuffer::set_half_write_timeout_us(uint64_t timeout_us)
+{
+    half_write_timeout_us_.store(timeout_us, std::memory_order_relaxed);
+}
+
+bool MPSCRingBuffer::try_skip_stale_reserved_entry(Entry *entry, uint64_t cur_head)
+{
+    uint64_t tail = tail_.load(std::memory_order_acquire);
+    if (tail <= cur_head) {
+        return false;
+    }
+
+    const uint64_t expected_seq = cur_head + 1;
+    if (entry->reserve_seq.load(std::memory_order_acquire) != expected_seq) {
+        return false;
+    }
+
+    uint64_t reserved_at = entry->reserve_ts_us.load(std::memory_order_acquire);
+    uint64_t timeout_us = half_write_timeout_us_.load(std::memory_order_relaxed);
+    if (reserved_at == 0 || timeout_us == 0 || now_us() - reserved_at < timeout_us) {
+        return false;
+    }
+
+    if (entry->is_ready.load(std::memory_order_acquire) == 1) {
+        return false;
+    }
+
+    entry->reserve_seq.store(0, std::memory_order_relaxed);
+    entry->reserve_ts_us.store(0, std::memory_order_relaxed);
+    entry->is_ready.store(0, std::memory_order_relaxed);
+    head_.store(expected_seq, std::memory_order_release);
+    if (congested_.load(std::memory_order_acquire) != 0) {
+        (void)sample_flow_state(approximate_used(), "skip_stale_reserved");
+    }
+    ATOMIC_LOG(LOG_LEVEL_WARN, "Skipped stale reserved ring entry, ring=%p, head=%llu, timeout_us=%llu",
+               (void *)this, cur_head, timeout_us);
+    return true;
 }
 
 int MPSCRingBuffer::flow_result_after_enqueue(uint64_t new_tail, std::atomic<uint64_t> &cached_head,
@@ -367,6 +412,8 @@ int MPSCRingBuffer::enqueue_local(const void *hdr, const void *body, uint32_t bo
     // 4. 计算地址 (本地直接算，复用 GetDataOffset 保证对齐)
     char *data_start = reinterpret_cast<char *>(this) + MPSCRingBuffer::GetDataOffset();
     Entry *entry = reinterpret_cast<Entry *>(data_start + ((curr_tail & index_mask_) * entry_stride_));
+    entry->reserve_ts_us.store(now_us(), std::memory_order_release);
+    entry->reserve_seq.store(curr_tail + 1, std::memory_order_release);
 
     // 5. 写入数据 (Scatter)
     if (body_len > 0) {
@@ -447,6 +494,8 @@ int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr,
 
     // (idx & mask) * stride
     Entry *entry = reinterpret_cast<Entry *>(data_start + ((curr_tail & mask) * stride));
+    entry->reserve_ts_us.store(now_us(), std::memory_order_release);
+    entry->reserve_seq.store(curr_tail + 1, std::memory_order_release);
 
     // 5. [Remote Write] 写入数据
     // 拷贝 Header
@@ -478,6 +527,7 @@ uint32_t MPSCRingBuffer::dequeue(void *buffer, uint32_t buffer_cap)
 
     // 精确检查： is_ready 确定 Entry 是否就绪
     if (entry->is_ready.load(std::memory_order_acquire) != 1) {
+        (void)try_skip_stale_reserved_entry(entry, cur_head);
         return 0;
     }
 

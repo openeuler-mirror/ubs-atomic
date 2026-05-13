@@ -45,6 +45,7 @@ struct alignas(CACHELINE_SIZE) NodeBoardInfo {
     std::atomic<bool> initialized;
     // 存储相对于 ring_region_ptr 的偏移量 (UINT64_MAX 表示无效)
     std::atomic<uint64_t> ring_offsets[MAX_PRIORITY_LEVELS];
+    std::atomic<uint64_t> consumer_heartbeat_ts_us;
     // dummy 写cache_probe_pad， 用于强制更新结构体
     volatile uint64_t cache_probe_pad;
 };
@@ -154,6 +155,11 @@ private:
 
     // 11. 启动分发线程
     void start_dispatcher();
+    void start_reliability_threads();
+    void stop_reliability_threads();
+    void run_consumer_heartbeat_loop();
+    void run_producer_heartbeat_monitor();
+    void refresh_local_consumer_heartbeat();
 
     // 获取远程环 (包含 ID 映射查找)
     int get_remote_ring(uint32_t node_id, uint32_t priority, MPSCRingBuffer **out_ring);
@@ -224,8 +230,12 @@ private:
 
     // 专用的分发线程
     std::thread dispatcher_thread_;
+    std::thread consumer_heartbeat_thread_;
+    std::thread producer_heartbeat_thread_;
     // 停止标志
     std::atomic<bool> stop_flag_;
+    std::atomic<bool> reliability_stop_flag_;
+    std::array<std::atomic<bool>, MAX_NODES_LIMIT> peer_alive_;
     uint32_t max_msg_size_global_;
     // 是否为锁实例
     bool is_for_lock;

@@ -94,6 +94,7 @@ public:
     uint64_t get_congestion_threshold_version() const;
     // 伪造满环状态，用于节点下线时快速阻断后续生产者写入。
     void trigger_force_full();
+    void set_half_write_timeout_us(uint64_t timeout_us);
 
     // 更新本地环的拥塞阈值。字段为原子写，允许运行期调整。
     int configure_congestion_threshold(uint32_t congestion_threshold_percent);
@@ -124,6 +125,7 @@ private:
                                          const char *event);
     uint32_t refresh_cached_threshold(std::atomic<uint32_t> &cached_threshold,
                                       std::atomic<uint64_t> &cached_threshold_version) const;
+    bool try_skip_stale_reserved_entry(Entry *entry, uint64_t cur_head);
     
 
 private:
@@ -142,6 +144,7 @@ private:
     std::atomic<uint64_t> congestion_threshold_version_;
     std::atomic<uint8_t> congested_;
     std::atomic<uint64_t> max_depth_;
+    std::atomic<uint64_t> half_write_timeout_us_;
 #ifdef UB_COMM_QUEUE_ENABLE_DEBUG_STATS
     std::atomic<uint64_t> full_fail_count_;
     std::atomic<uint64_t> cas_fail_count_;

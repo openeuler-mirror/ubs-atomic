@@ -12,6 +12,9 @@
 #include <set>
 
 namespace ub_comm_queue {
+static constexpr uint64_t CONSUMER_HEARTBEAT_INTERVAL_US = 100000ULL;
+static constexpr uint64_t CONSUMER_HEARTBEAT_TIMEOUT_US = 1000000ULL;
+
 UBShmTransport::UBShmTransport()
     : conf_({}),
       init_region_ptr_(nullptr),
@@ -20,12 +23,16 @@ UBShmTransport::UBShmTransport()
       max_msg_size_global_(0),
       active_async_tasks_(0),
       async_wait_timeout_us(0),
-      stop_flag_(false)
+      stop_flag_(false),
+      reliability_stop_flag_(false)
 {
     num_threads =
         std::max(static_cast<size_t>(std::thread::hardware_concurrency() * WORKER_POOL_RATIO), WORKER_POOL_MIN_SIZE);
     max_async_queue_len = num_threads;
     local_rings_.fill(nullptr);
+    for (auto &alive : peer_alive_) {
+        alive.store(true, std::memory_order_relaxed);
+    }
 }
 
 UBShmTransport::~UBShmTransport()
@@ -82,6 +89,13 @@ static uint64_t generate_instance_id()
     clock_gettime(CLOCK_MONOTONIC, &ts);
     // 组合秒和纳秒，保证单调递增
     return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
+static uint64_t wall_time_us()
+{
+    struct timespec ts {};
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
 
 struct FlowConfigUpdateMessage {
@@ -212,6 +226,7 @@ int UBShmTransport::init(const ub_shm_area_t *init_area, const ub_ring_region_ma
     }
     register_func(MSG_TYPE_SYS_PEER_EXIT, UB_FUNC_SYNC, on_peer_exit, this);
     register_func(MSG_TYPE_SYS_FLOW_CONFIG_UPDATE, UB_FUNC_SYNC, on_flow_config_update, this);
+    start_reliability_threads();
 
     // 9. 等待集群就绪
     wait_for_cluster_ready();
@@ -589,6 +604,7 @@ int UBShmTransport::publish_to_billboard(const std::vector<uint64_t> &offsets)
         // 使用 Non-Temporal Store 写入 UINT64_MAX
         ub_nt_store64((volatile uint64_t *)&my_info.ring_offsets[p], UINT64_MAX);
     }
+    my_info.consumer_heartbeat_ts_us.store(0, std::memory_order_relaxed);
     // 屏障：确保无效值写入完成
     arm_sfence();
 
@@ -609,6 +625,7 @@ int UBShmTransport::publish_to_billboard(const std::vector<uint64_t> &offsets)
         // 屏障：确保数据落盘，防止 Ready 标志先被看到而数据没到
         arm_sfence();
     }
+    my_info.consumer_heartbeat_ts_us.store(wall_time_us(), std::memory_order_release);
 
     // ============================================================
     // 阶段 3: 标记 Ready
@@ -724,6 +741,67 @@ void UBShmTransport::start_dispatcher()
     dispatcher_thread_ = std::thread(&UBShmTransport::run_dispatcher_loop, this);
 }
 
+void UBShmTransport::refresh_local_consumer_heartbeat()
+{
+    int32_t my_idx = get_compact_index(conf_.current_node_id);
+    if (my_idx < 0 || init_region_ptr_ == nullptr) {
+        return;
+    }
+    Billboard *board = reinterpret_cast<Billboard *>(init_region_ptr_);
+    board->nodes[my_idx].consumer_heartbeat_ts_us.store(wall_time_us(), std::memory_order_release);
+}
+
+void UBShmTransport::run_consumer_heartbeat_loop()
+{
+    while (!reliability_stop_flag_.load(std::memory_order_relaxed)) {
+        refresh_local_consumer_heartbeat();
+        std::this_thread::sleep_for(std::chrono::microseconds(CONSUMER_HEARTBEAT_INTERVAL_US));
+    }
+}
+
+void UBShmTransport::run_producer_heartbeat_monitor()
+{
+    Billboard *board = reinterpret_cast<Billboard *>(init_region_ptr_);
+    while (!reliability_stop_flag_.load(std::memory_order_relaxed)) {
+        uint64_t now = wall_time_us();
+        for (uint32_t idx = 0; idx < idx_to_node_id_.size(); ++idx) {
+            uint32_t node_id = idx_to_node_id_[idx];
+            if (node_id == conf_.current_node_id || node_id >= MAX_NODES_LIMIT) {
+                continue;
+            }
+
+            force_refresh_whole_struct(&board->nodes[idx]);
+            uint64_t heartbeat = board->nodes[idx].consumer_heartbeat_ts_us.load(std::memory_order_acquire);
+            bool alive = heartbeat != 0 && now >= heartbeat && (now - heartbeat) <= CONSUMER_HEARTBEAT_TIMEOUT_US;
+            bool was_alive = peer_alive_[node_id].exchange(alive, std::memory_order_acq_rel);
+            if (was_alive && !alive) {
+                ATOMIC_LOG(LOG_LEVEL_WARN, "Consumer heartbeat timeout, node=%u heartbeat_us=%llu now_us=%llu",
+                           node_id, heartbeat, now);
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(CONSUMER_HEARTBEAT_INTERVAL_US));
+    }
+}
+
+void UBShmTransport::start_reliability_threads()
+{
+    reliability_stop_flag_.store(false, std::memory_order_release);
+    refresh_local_consumer_heartbeat();
+    consumer_heartbeat_thread_ = std::thread(&UBShmTransport::run_consumer_heartbeat_loop, this);
+    producer_heartbeat_thread_ = std::thread(&UBShmTransport::run_producer_heartbeat_monitor, this);
+}
+
+void UBShmTransport::stop_reliability_threads()
+{
+    reliability_stop_flag_.store(true, std::memory_order_release);
+    if (consumer_heartbeat_thread_.joinable()) {
+        consumer_heartbeat_thread_.join();
+    }
+    if (producer_heartbeat_thread_.joinable()) {
+        producer_heartbeat_thread_.join();
+    }
+}
+
 // =========================================================
 // 运行时逻辑
 // =========================================================
@@ -821,6 +899,11 @@ int UBShmTransport::send(const message_t *msg)
     if (__builtin_expect(prio >= MAX_PRIORITY_LEVELS, 0)) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Invalid priority %u", prio);
         return -EINVAL;
+    }
+    if (__builtin_expect(dest_id != conf_.current_node_id && dest_id < MAX_NODES_LIMIT &&
+                         !peer_alive_[dest_id].load(std::memory_order_acquire), 0)) {
+        ATOMIC_LOG(LOG_LEVEL_WARN, "Send failed: destination consumer heartbeat timeout, node=%u", dest_id);
+        return UB_COMM_ERR_PEER_NOT_READY;
     }
 
     // --- 分流逻辑 ---
@@ -1166,6 +1249,7 @@ void UBShmTransport::deinit_and_broadcast()
     if (dispatcher_thread_.joinable()) {
         dispatcher_thread_.join();
     }
+    stop_reliability_threads();
     if (init_complete_) {
         // -----------------------------------------------------------------
         // 1. 伪造环满 (立即生效，阻断未来的拉取)
@@ -1192,6 +1276,7 @@ void UBShmTransport::deinit_and_broadcast()
 
             // 2. 标记为未初始化 (即下线)
             my_node.initialized.store(false, std::memory_order_release);
+            my_node.consumer_heartbeat_ts_us.store(0, std::memory_order_release);
 
             // 3. 利用 padding 强制刷一下 Cache，虽然 atomic release 已经足够
             my_node.cache_probe_pad = 0xDEAD;
