@@ -1,5 +1,8 @@
+#include <atomic>
 #include <cstdint>
+#if defined(__aarch64__) || defined(__arm__)
 #include <arm_neon.h>
+#endif
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
@@ -20,12 +23,20 @@ static inline void cpu_relax_arm() {
 
 // 【写屏障】对应 x86: sfence
 static inline void arm_sfence() {
+#if defined(__aarch64__) || defined(__arm__)
     asm volatile("dsb ish" ::: "memory");
+#else
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
 }
 
 // 【读屏障】对应 x86: lfence
 static inline void arm_lfence() {
+#if defined(__aarch64__) || defined(__arm__)
     asm volatile("dsb ish" ::: "memory");
+#else
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
 }
 
 
