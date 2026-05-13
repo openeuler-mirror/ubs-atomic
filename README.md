@@ -445,7 +445,7 @@ sh test/run_ut.sh
 测试脚本会：
 
 - 准备 `mockcpp` 补丁。
-- 使用 `test/CMakeLists.txt` 构建 `ubturbo_tdsql_ut`。
+- 使用 `test/CMakeLists.txt` 构建 `ubs_atomic_ut`。
 - 执行测试并生成覆盖率数据。
 - 输出 `gcovr_report` / `coverage.info` 等结果。
 
@@ -453,7 +453,7 @@ sh test/run_ut.sh
 
 常见输出目录：
 
-- `test/build/ubturbo_tdsql_ut`
+- `test/build/ubs_atomic_ut`
 - `test/build/gcovr_report/`
 - `test/build/coverage.info`
 

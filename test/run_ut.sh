@@ -36,14 +36,14 @@ fi
 cd ${code_dir}/test
 
 cmake -S . -B ${build_dir}
-echo "====== 开始编译 ubturbo_tdsql_ut ======"
-cmake --build ${build_dir} --target ubturbo_tdsql_ut -j$(nproc) || exit 1
-echo "====== ubturbo_tdsql_ut 编译完成"
+echo "====== 开始编译 ubs_atomic_ut ======"
+cmake --build ${build_dir} --target ubs_atomic_ut -j$(nproc) || exit 1
+echo "====== ubs_atomic_ut 编译完成"
 
 cd ${build_dir}
 lcov --directory . --zerocounters
-echo "====== 开始执行 ubturbo_tdsql_ut ======"
-./ubturbo_tdsql_ut
+echo "====== 开始执行 ubs_atomic_ut ======"
+./ubs_atomic_ut
 
 lcov --d . --c --output-file ./test.info --rc lcov_branch_coverage=1
 lcov -e ./test.info "*/src/*" -output-file ./coverage.info --rc lcov_branch_coverage=1
