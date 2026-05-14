@@ -45,7 +45,7 @@ struct alignas(CACHELINE_SIZE) NodeBoardInfo {
     std::atomic<bool> initialized;
     // 存储相对于 ring_region_ptr 的偏移量 (UINT64_MAX 表示无效)
     std::atomic<uint64_t> ring_offsets[MAX_PRIORITY_LEVELS];
-    std::atomic<uint64_t> consumer_heartbeat_ts_us;
+    std::atomic<uint64_t> consumer_heartbeat_seq;
     // dummy 写cache_probe_pad， 用于强制更新结构体
     volatile uint64_t cache_probe_pad;
 };
@@ -236,6 +236,9 @@ private:
     std::atomic<bool> stop_flag_;
     std::atomic<bool> reliability_stop_flag_;
     std::array<std::atomic<bool>, MAX_NODES_LIMIT> peer_alive_;
+    std::array<uint64_t, MAX_NODES_LIMIT> peer_heartbeat_seq_;
+    std::array<uint64_t, MAX_NODES_LIMIT> peer_heartbeat_seen_us_;
+    uint64_t local_consumer_heartbeat_seq_;
     uint32_t max_msg_size_global_;
     // 是否为锁实例
     bool is_for_lock;

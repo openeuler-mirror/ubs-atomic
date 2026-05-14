@@ -649,6 +649,18 @@ otherwise          -> UB_COMM_QUEUE_NORMAL
 
 注意：`HALF_WRITE_TIMEOUT_US` 必须大于生产者正常写入最大耗时。阈值过小会把慢写误判为半写并丢弃该消息；阈值过大则半写槽恢复更慢。
 
+### 消费者心跳感知
+
+消费者存活感知不使用跨节点时间戳。公告牌 `NodeBoardInfo` 中保存的是 `consumer_heartbeat_seq`，即消费者后台线程周期性递增的序号：
+
+- 消费者本地后台线程定时执行 `consumer_heartbeat_seq.store(++local_seq, release)`。
+- 生产者本地后台监控线程轮询远端 `consumer_heartbeat_seq`。
+- 如果监控线程看到远端序号变化，就用本节点 `CLOCK_MONOTONIC` 记录 `last_seen_us`。
+- 如果序号长时间不变化，且本地 `now_us - last_seen_us > CONSUMER_HEARTBEAT_TIMEOUT_US`，则把本地 `peer_alive_[node_id]` 标记为 false。
+- 发送热路径只读取本地 `peer_alive_` 快照，不读取共享心跳字段。
+
+这样共享内存心跳字段只表达“对端消费者线程还在推进”，不表达任何时间语义。发送节点不会拿接收节点写入的 wall clock 与本地时间做差，因此不受跨节点时钟不同步、NTP 调整或系统时间回拨影响。
+
 `dispatch_internal` 根据 `msg_type` 查找回调：
 
 - 同步回调：直接在分发线程中执行。
