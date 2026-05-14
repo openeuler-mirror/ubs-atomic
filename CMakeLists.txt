@@ -74,6 +74,7 @@ message(DEBUG "CMAKE_CXX_FLAGS_MINSIZEREL: ${CMAKE_CXX_FLAGS_MINSIZEREL}")
 
 # 加上构建过程日志的颜色输出
 option (FORCE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang only)." OFF)
+option(UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT "Enable ub_comm_queue half-write fault injection hooks for demos/tests" OFF)
 if (${FORCE_COLORED_OUTPUT})
     if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
         add_compile_options(-fcolor-diagnostics)

@@ -5,8 +5,13 @@
 #include "MPSCRingBuffer.h"
 #include <cerrno>
 #include <cstdint>
+#include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
+#ifdef UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT
+#include <unistd.h>
+#endif
 
 #define MSG_HEADER_LEN sizeof(message_header_t)
 
@@ -19,6 +24,7 @@ static constexpr uint64_t FLOW_CONFIG_REFRESH_INTERVAL = 1024;
 static constexpr uint64_t HALF_WRITE_TIMEOUT_US = 5000000ULL;
 static constexpr uint32_t STALE_RESERVED_PROBE_MASK = 511;
 static constexpr uint32_t LOCAL_STALE_STATE_SLOTS = 32;
+static constexpr int HALF_WRITE_INJECT_EXIT_CODE = 86;
 
 struct MPSCRingBuffer::Entry {
     std::atomic<uint64_t> ready_seq; // readable only when ready_seq == head + 1
@@ -46,6 +52,30 @@ static LocalStaleReservationState &get_local_stale_state(const MPSCRingBuffer *r
     states[start] = {};
     states[start].ring = ring;
     return states[start];
+}
+
+static void maybe_inject_half_write_exit(const char *path, const MPSCRingBuffer *ring, uint64_t reserved_tail)
+{
+#ifdef UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT
+    static std::atomic<bool> injected{false};
+    const char *enabled = std::getenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_EXIT");
+    if (enabled == nullptr || enabled[0] != '1' || injected.exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+
+    ATOMIC_LOG(LOG_LEVEL_CRITICAL,
+               "{event:\"half_write_inject_exit\", path:\"%s\", ring:%p, reserved_tail:%llu, exit_code:%d}",
+               path, (const void *)ring, reserved_tail, HALF_WRITE_INJECT_EXIT_CODE);
+    fprintf(stderr,
+            "[half_write_inject] path=%s ring=%p reserved_tail=%llu exit_code=%d\n",
+            path, (const void *)ring, (unsigned long long)reserved_tail, HALF_WRITE_INJECT_EXIT_CODE);
+    fflush(stderr);
+    _exit(HALF_WRITE_INJECT_EXIT_CODE);
+#else
+    (void)path;
+    (void)ring;
+    (void)reserved_tail;
+#endif
 }
 
 static uint32_t calculate_flow_threshold(uint32_t capacity, uint32_t percent)
@@ -442,6 +472,7 @@ int MPSCRingBuffer::enqueue_local(const void *hdr, const void *body, uint32_t bo
     // 4. 计算地址 (本地直接算，复用 GetDataOffset 保证对齐)
     char *data_start = reinterpret_cast<char *>(this) + MPSCRingBuffer::GetDataOffset();
     Entry *entry = reinterpret_cast<Entry *>(data_start + ((curr_tail & index_mask_) * entry_stride_));
+    maybe_inject_half_write_exit("local", this, curr_tail);
 
     // 5. 写入数据 (Scatter)
     if (body_len > 0) {
@@ -522,6 +553,7 @@ int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr,
 
     // (idx & mask) * stride
     Entry *entry = reinterpret_cast<Entry *>(data_start + ((curr_tail & mask) * stride));
+    maybe_inject_half_write_exit("remote", remote_this, curr_tail);
 
     // 5. [Remote Write] 写入数据
     // 拷贝 Header
