@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <vector>
 #include <thread>
 
 #include "ub_dist_comm_queue.h"
@@ -55,6 +56,7 @@ char g_sender_shm_name[64] = "shm_node0_export";
 char g_receiver_shm_name[64] = "shm_node1_export";
 int g_log_level = LOG_LEVEL_WARN;
 int g_wait_peer_timeout_s = 15;
+uint32_t g_expected_good = 8;
 const char *g_prog_path = nullptr;
 ub_shm_comm_t *g_handle = nullptr;
 std::atomic<uint32_t> g_good_received{0};
@@ -277,7 +279,8 @@ int run_receiver()
         return 2;
     }
 
-    printf("[receiver] node B ready; waiting for poison slot to be skipped and good message to arrive\n");
+    printf("[receiver] node B ready; waiting for poison slot to be skipped and %u good messages to arrive\n",
+           g_expected_good);
     std::atomic<bool> stop_status{false};
     std::thread status_thread(print_status_loop, &handle, std::ref(stop_status));
 
@@ -289,10 +292,11 @@ int run_receiver()
             ub_comm_queue_deinit(&handle);
             return 3;
         }
-        if (g_good_received.load(std::memory_order_acquire) != 0) {
+        if (g_good_received.load(std::memory_order_acquire) >= g_expected_good) {
             stop_status.store(true, std::memory_order_release);
             status_thread.join();
-            printf("[receiver] PASS: good message arrived after half-write recovery\n");
+            printf("[receiver] PASS: %u good messages arrived after half-write recovery\n",
+                   g_good_received.load(std::memory_order_acquire));
             ub_comm_queue_deinit(&handle);
             return 0;
         }
@@ -323,6 +327,8 @@ int run_sender(bool inject)
         printf("[injector] enabling UB_COMM_QUEUE_INJECT_HALF_WRITE_EXIT=1; process should exit with %d\n",
                INJECT_EXIT_CODE);
         setenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_EXIT", "1", 1);
+        unsetenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_ACTION");
+        unsetenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_MSG_TYPE");
         (void)send_body(&handle, TYPE_POISON, 1);
         fprintf(stderr, "[injector] ERROR: send returned; rebuild lib with UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT\n");
         ub_comm_queue_deinit(&handle);
@@ -335,6 +341,54 @@ int run_sender(bool inject)
     return ok ? 0 : 4;
 }
 
+int run_thread_poison_sender()
+{
+    ub_shm_comm_t handle = nullptr;
+    if (init_handle(handle, NODE_A) != 0) {
+        return 1;
+    }
+    if (!wait_peer_ready(&handle, NODE_B, g_wait_peer_timeout_s)) {
+        fprintf(stderr, "[thread-poison] peer B not ready\n");
+        ub_comm_queue_deinit(&handle);
+        return 2;
+    }
+
+    char poison_type[16];
+    snprintf(poison_type, sizeof(poison_type), "%u", TYPE_POISON);
+    setenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_MSG_TYPE", poison_type, 1);
+    setenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_ACTION", "hang", 1);
+    unsetenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_EXIT");
+
+    printf("[thread-poison] start poison thread: msg_type=%u action=hang\n", TYPE_POISON);
+    std::thread poison_thread([&handle]() {
+        (void)send_body(&handle, TYPE_POISON, 1);
+        fprintf(stderr, "[thread-poison] ERROR: poison send returned; injection did not hang\n");
+    });
+    poison_thread.detach();
+
+    std::this_thread::sleep_for(1s);
+    printf("[thread-poison] start %u normal sender threads while poison thread is stuck\n", g_expected_good);
+
+    std::atomic<uint32_t> ok_count{0};
+    std::vector<std::thread> workers;
+    workers.reserve(g_expected_good);
+    for (uint32_t i = 0; i < g_expected_good; ++i) {
+        workers.emplace_back([&handle, &ok_count, i]() {
+            if (send_body(&handle, TYPE_GOOD, 100 + i)) {
+                ok_count.fetch_add(1, std::memory_order_release);
+            }
+        });
+    }
+    for (auto &worker : workers) {
+        worker.join();
+    }
+
+    printf("[thread-poison] normal sends completed ok=%u/%u; exiting process will kill detached poison thread\n",
+           ok_count.load(std::memory_order_acquire), g_expected_good);
+    ub_comm_queue_deinit(&handle);
+    return ok_count.load(std::memory_order_acquire) == g_expected_good ? 0 : 4;
+}
+
 pid_t spawn_role(char role)
 {
     pid_t pid = fork();
@@ -345,10 +399,12 @@ pid_t spawn_role(char role)
     char role_arg[2] = {role, '\0'};
     char log_arg[16];
     char wait_arg[16];
+    char expected_arg[16];
     snprintf(log_arg, sizeof(log_arg), "%d", g_log_level);
     snprintf(wait_arg, sizeof(wait_arg), "%d", g_wait_peer_timeout_s);
+    snprintf(expected_arg, sizeof(expected_arg), "%u", g_expected_good);
     execl(g_prog_path, g_prog_path, "--role", role_arg, "-s", g_sender_shm_name, "-r", g_receiver_shm_name,
-          "-l", log_arg, "-w", wait_arg, nullptr);
+          "-l", log_arg, "-w", wait_arg, "-n", expected_arg, nullptr);
     fprintf(stderr, "[driver] execl role=%c failed errno=%d\n", role, errno);
     _exit(127);
 }
@@ -375,6 +431,7 @@ int wait_child(pid_t pid, const char *name)
 
 int run_driver()
 {
+    g_expected_good = 1;
     printf("[driver] start receiver B\n");
     pid_t receiver = spawn_role('B');
     std::this_thread::sleep_for(2s);
@@ -402,13 +459,35 @@ int run_driver()
     return 3;
 }
 
+int run_thread_driver()
+{
+    printf("[thread-driver] start receiver B\n");
+    pid_t receiver = spawn_role('B');
+    std::this_thread::sleep_for(2s);
+
+    printf("[thread-driver] start threaded poison sender T\n");
+    pid_t sender = spawn_role('T');
+    int sender_code = wait_child(sender, "thread-poison-sender");
+    int receiver_code = wait_child(receiver, "receiver");
+
+    if (sender_code == 0 && receiver_code == 0) {
+        printf("[thread-driver] PASS: threaded half-write recovery verified\n");
+        return 0;
+    }
+    fprintf(stderr, "[thread-driver] FAIL: sender=%d receiver=%d\n", sender_code, receiver_code);
+    return 3;
+}
+
 void print_help(const char *prog)
 {
-    printf("Usage: %s --role D|B|I|A [-s sender_shm] [-r receiver_shm] [-l log_level] [-w wait_peer_timeout_s]\n", prog);
+    printf("Usage: %s --role D|H|B|I|A|T [-s sender_shm] [-r receiver_shm] [-l log_level] "
+           "[-w wait_peer_timeout_s] [-n expected_good]\n", prog);
     printf("  D: one-shot driver. Starts B, then I, then A and checks exit codes.\n");
+    printf("  H: threaded poison driver. Starts B, then T in the same two-node environment.\n");
     printf("  B: receiver node. Waits for a normal message after a half-written head slot.\n");
     printf("  I: injector node. Sends one message and exits after tail reservation when injection is enabled.\n");
     printf("  A: normal sender node. Sends the message that should pass after recovery.\n");
+    printf("  T: same-process threaded poison sender. One thread hangs after tail reservation; other threads send good messages.\n");
     printf("Build the queue library with -DUB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT for role I/driver tests.\n");
 }
 
@@ -420,7 +499,7 @@ bool parse_args(int argc, char **argv)
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "o:s:r:l:w:h", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "o:s:r:l:w:n:h", long_options, nullptr)) != -1) {
         switch (opt) {
             case 'o':
                 g_role = optarg[0];
@@ -437,6 +516,12 @@ bool parse_args(int argc, char **argv)
             case 'w':
                 g_wait_peer_timeout_s = atoi(optarg);
                 break;
+            case 'n':
+                g_expected_good = static_cast<uint32_t>(strtoul(optarg, nullptr, 10));
+                if (g_expected_good == 0) {
+                    g_expected_good = 1;
+                }
+                break;
             case 'h':
                 print_help(argv[0]);
                 return false;
@@ -446,7 +531,7 @@ bool parse_args(int argc, char **argv)
         }
     }
 
-    if (g_role != 'D' && g_role != 'B' && g_role != 'I' && g_role != 'A') {
+    if (g_role != 'D' && g_role != 'H' && g_role != 'B' && g_role != 'I' && g_role != 'A' && g_role != 'T') {
         fprintf(stderr, "invalid role '%c'\n", g_role);
         return false;
     }
@@ -469,11 +554,17 @@ int main(int argc, char **argv)
     if (g_role == 'D') {
         return run_driver();
     }
+    if (g_role == 'H') {
+        return run_thread_driver();
+    }
     if (g_role == 'B') {
         return run_receiver();
     }
     if (g_role == 'I') {
         return run_sender(true);
+    }
+    if (g_role == 'T') {
+        return run_thread_poison_sender();
     }
     return run_sender(false);
 }

@@ -54,27 +54,63 @@ static LocalStaleReservationState &get_local_stale_state(const MPSCRingBuffer *r
     return states[start];
 }
 
-static void maybe_inject_half_write_exit(const char *path, const MPSCRingBuffer *ring, uint64_t reserved_tail)
+static bool half_write_inject_type_matches(const void *hdr)
+{
+#ifdef UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT
+    const char *type_env = std::getenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_MSG_TYPE");
+    if (type_env == nullptr || type_env[0] == '\0') {
+        return true;
+    }
+    if (hdr == nullptr) {
+        return false;
+    }
+    auto *msg_hdr = static_cast<const message_header_t *>(hdr);
+    uint32_t inject_type = static_cast<uint32_t>(std::strtoul(type_env, nullptr, 0));
+    return msg_hdr->msg_type == inject_type;
+#else
+    (void)hdr;
+    return false;
+#endif
+}
+
+static void maybe_inject_half_write_fault(const char *path, const MPSCRingBuffer *ring, uint64_t reserved_tail,
+                                          const void *hdr)
 {
 #ifdef UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT
     static std::atomic<bool> injected{false};
-    const char *enabled = std::getenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_EXIT");
-    if (enabled == nullptr || enabled[0] != '1' || injected.exchange(true, std::memory_order_relaxed)) {
+    const char *exit_enabled = std::getenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_EXIT");
+    const char *action = std::getenv("UB_COMM_QUEUE_INJECT_HALF_WRITE_ACTION");
+    const bool enabled = (exit_enabled != nullptr && exit_enabled[0] == '1') || action != nullptr;
+    if (!enabled || !half_write_inject_type_matches(hdr) || injected.exchange(true, std::memory_order_relaxed)) {
         return;
     }
 
+    if (action == nullptr || action[0] == '\0') {
+        action = "process_exit";
+    }
+
     ATOMIC_LOG(LOG_LEVEL_CRITICAL,
-               "{event:\"half_write_inject_exit\", path:\"%s\", ring:%p, reserved_tail:%llu, exit_code:%d}",
-               path, (const void *)ring, reserved_tail, HALF_WRITE_INJECT_EXIT_CODE);
+               "{event:\"half_write_inject_fault\", action:\"%s\", path:\"%s\", ring:%p, reserved_tail:%llu, "
+               "exit_code:%d}",
+               action, path, (const void *)ring, reserved_tail, HALF_WRITE_INJECT_EXIT_CODE);
     fprintf(stderr,
-            "[half_write_inject] path=%s ring=%p reserved_tail=%llu exit_code=%d\n",
-            path, (const void *)ring, (unsigned long long)reserved_tail, HALF_WRITE_INJECT_EXIT_CODE);
+            "[half_write_inject] action=%s path=%s ring=%p reserved_tail=%llu exit_code=%d\n",
+            action, path, (const void *)ring, (unsigned long long)reserved_tail, HALF_WRITE_INJECT_EXIT_CODE);
     fflush(stderr);
+
+    if (std::strcmp(action, "hang") == 0) {
+        timespec ts{1, 0};
+        while (true) {
+            nanosleep(&ts, nullptr);
+        }
+    }
+
     _exit(HALF_WRITE_INJECT_EXIT_CODE);
 #else
     (void)path;
     (void)ring;
     (void)reserved_tail;
+    (void)hdr;
 #endif
 }
 
@@ -472,7 +508,7 @@ int MPSCRingBuffer::enqueue_local(const void *hdr, const void *body, uint32_t bo
     // 4. 计算地址 (本地直接算，复用 GetDataOffset 保证对齐)
     char *data_start = reinterpret_cast<char *>(this) + MPSCRingBuffer::GetDataOffset();
     Entry *entry = reinterpret_cast<Entry *>(data_start + ((curr_tail & index_mask_) * entry_stride_));
-    maybe_inject_half_write_exit("local", this, curr_tail);
+    maybe_inject_half_write_fault("local", this, curr_tail, hdr);
 
     // 5. 写入数据 (Scatter)
     if (body_len > 0) {
@@ -553,7 +589,7 @@ int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr,
 
     // (idx & mask) * stride
     Entry *entry = reinterpret_cast<Entry *>(data_start + ((curr_tail & mask) * stride));
-    maybe_inject_half_write_exit("remote", remote_this, curr_tail);
+    maybe_inject_half_write_fault("remote", remote_this, curr_tail, hdr);
 
     // 5. [Remote Write] 写入数据
     // 拷贝 Header
