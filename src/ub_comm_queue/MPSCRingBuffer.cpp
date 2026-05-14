@@ -16,15 +16,37 @@ static constexpr int MAX_CAS_RETRIES = 1000;
 // Defaults keep flow-control enabled without requiring old callers to set the new config fields.
 static constexpr uint32_t DEFAULT_CONGESTION_THRESHOLD_PERCENT = 80;
 static constexpr uint64_t FLOW_CONFIG_REFRESH_INTERVAL = 1024;
-static constexpr uint64_t DEFAULT_HALF_WRITE_TIMEOUT_US = 5000000ULL;
+static constexpr uint64_t HALF_WRITE_TIMEOUT_US = 5000000ULL;
+static constexpr uint32_t STALE_RESERVED_PROBE_MASK = 511;
+static constexpr uint32_t LOCAL_STALE_STATE_SLOTS = 32;
 
 struct MPSCRingBuffer::Entry {
-    std::atomic<uint8_t> is_ready; // 1: readable, 0: empty
-    uint8_t padding[7];            // Align reservation metadata to 8 bytes
-    std::atomic<uint64_t> reserve_seq;
-    std::atomic<uint64_t> reserve_ts_us;
+    std::atomic<uint64_t> ready_seq; // readable only when ready_seq == head + 1
     uint8_t data[];                // Flexible array member
 };
+
+struct LocalStaleReservationState {
+    const MPSCRingBuffer *ring{nullptr};
+    uint64_t head_seq{UINT64_MAX};
+    uint64_t first_seen_us{0};
+};
+
+static LocalStaleReservationState &get_local_stale_state(const MPSCRingBuffer *ring)
+{
+    static thread_local LocalStaleReservationState states[LOCAL_STALE_STATE_SLOTS];
+    uint32_t start = (reinterpret_cast<uintptr_t>(ring) >> 6) & (LOCAL_STALE_STATE_SLOTS - 1);
+    for (uint32_t i = 0; i < LOCAL_STALE_STATE_SLOTS; ++i) {
+        uint32_t idx = (start + i) & (LOCAL_STALE_STATE_SLOTS - 1);
+        if (states[idx].ring == ring || states[idx].ring == nullptr) {
+            states[idx].ring = ring;
+            return states[idx];
+        }
+    }
+
+    states[start] = {};
+    states[start].ring = ring;
+    return states[start];
+}
 
 static uint32_t calculate_flow_threshold(uint32_t capacity, uint32_t percent)
 {
@@ -63,8 +85,7 @@ MPSCRingBuffer::MPSCRingBuffer(uint8_t *buffer_start, uint32_t capacity, uint32_
       congestion_threshold_(calculate_flow_threshold(capacity, DEFAULT_CONGESTION_THRESHOLD_PERCENT)),
       congestion_threshold_version_(1),
       congested_(0),
-      max_depth_(0),
-      half_write_timeout_us_(DEFAULT_HALF_WRITE_TIMEOUT_US)
+      max_depth_(0)
 #ifdef UB_COMM_QUEUE_ENABLE_DEBUG_STATS
       ,
       full_fail_count_(0),
@@ -88,9 +109,7 @@ MPSCRingBuffer::MPSCRingBuffer(uint8_t *buffer_start, uint32_t capacity, uint32_
     // 初始化所有 Entry 状态
     for (uint32_t i = 0; i < capacity; i++) {
         Entry *entry = get_entry(i);
-        entry->is_ready.store(0, std::memory_order_relaxed);
-        entry->reserve_seq.store(0, std::memory_order_relaxed);
-        entry->reserve_ts_us.store(0, std::memory_order_relaxed);
+        entry->ready_seq.store(0, std::memory_order_relaxed);
     }
 
     // 确保初始化写入内存 (ARM Store Barrier)
@@ -101,6 +120,13 @@ static uint64_t now_us()
 {
     struct timespec ts {};
     clock_gettime(CLOCK_REALTIME, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
+}
+
+static uint64_t steady_us()
+{
+    struct timespec ts {};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
 
@@ -217,11 +243,6 @@ uint64_t MPSCRingBuffer::approximate_used() const
     return used > entry_num_ ? entry_num_ : used;
 }
 
-void MPSCRingBuffer::set_half_write_timeout_us(uint64_t timeout_us)
-{
-    half_write_timeout_us_.store(timeout_us, std::memory_order_relaxed);
-}
-
 bool MPSCRingBuffer::try_skip_stale_reserved_entry(Entry *entry, uint64_t cur_head)
 {
     uint64_t tail = tail_.load(std::memory_order_acquire);
@@ -230,29 +251,38 @@ bool MPSCRingBuffer::try_skip_stale_reserved_entry(Entry *entry, uint64_t cur_he
     }
 
     const uint64_t expected_seq = cur_head + 1;
-    if (entry->reserve_seq.load(std::memory_order_acquire) != expected_seq) {
+    if (entry->ready_seq.load(std::memory_order_acquire) == expected_seq) {
         return false;
     }
 
-    uint64_t reserved_at = entry->reserve_ts_us.load(std::memory_order_acquire);
-    uint64_t timeout_us = half_write_timeout_us_.load(std::memory_order_relaxed);
-    if (reserved_at == 0 || timeout_us == 0 || now_us() - reserved_at < timeout_us) {
+    LocalStaleReservationState &state = get_local_stale_state(this);
+
+    uint64_t now = steady_us();
+    if (state.head_seq != cur_head) {
+        state.head_seq = cur_head;
+        state.first_seen_us = now;
         return false;
     }
 
-    if (entry->is_ready.load(std::memory_order_acquire) == 1) {
+    if (state.first_seen_us == 0 || now < state.first_seen_us || now - state.first_seen_us < HALF_WRITE_TIMEOUT_US) {
         return false;
     }
 
-    entry->reserve_seq.store(0, std::memory_order_relaxed);
-    entry->reserve_ts_us.store(0, std::memory_order_relaxed);
-    entry->is_ready.store(0, std::memory_order_relaxed);
+    if (entry->ready_seq.load(std::memory_order_acquire) == expected_seq) {
+        state.head_seq = UINT64_MAX;
+        state.first_seen_us = 0;
+        return false;
+    }
+
+    entry->ready_seq.store(0, std::memory_order_relaxed);
     head_.store(expected_seq, std::memory_order_release);
+    state.head_seq = UINT64_MAX;
+    state.first_seen_us = 0;
     if (congested_.load(std::memory_order_acquire) != 0) {
         (void)sample_flow_state(approximate_used(), "skip_stale_reserved");
     }
     ATOMIC_LOG(LOG_LEVEL_WARN, "Skipped stale reserved ring entry, ring=%p, head=%llu, timeout_us=%llu",
-               (void *)this, cur_head, timeout_us);
+               (void *)this, cur_head, HALF_WRITE_TIMEOUT_US);
     return true;
 }
 
@@ -412,8 +442,6 @@ int MPSCRingBuffer::enqueue_local(const void *hdr, const void *body, uint32_t bo
     // 4. 计算地址 (本地直接算，复用 GetDataOffset 保证对齐)
     char *data_start = reinterpret_cast<char *>(this) + MPSCRingBuffer::GetDataOffset();
     Entry *entry = reinterpret_cast<Entry *>(data_start + ((curr_tail & index_mask_) * entry_stride_));
-    entry->reserve_ts_us.store(now_us(), std::memory_order_release);
-    entry->reserve_seq.store(curr_tail + 1, std::memory_order_release);
 
     // 5. 写入数据 (Scatter)
     if (body_len > 0) {
@@ -424,7 +452,7 @@ int MPSCRingBuffer::enqueue_local(const void *hdr, const void *body, uint32_t bo
     }
 
     // 6. 提交
-    entry->is_ready.store(1, std::memory_order_release);
+    entry->ready_seq.store(curr_tail + 1, std::memory_order_release);
 
     return flow_result_after_enqueue(curr_tail + 1, local_producer_cached_head_, "enqueue_success");
 }
@@ -494,8 +522,6 @@ int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr,
 
     // (idx & mask) * stride
     Entry *entry = reinterpret_cast<Entry *>(data_start + ((curr_tail & mask) * stride));
-    entry->reserve_ts_us.store(now_us(), std::memory_order_release);
-    entry->reserve_seq.store(curr_tail + 1, std::memory_order_release);
 
     // 5. [Remote Write] 写入数据
     // 拷贝 Header
@@ -512,7 +538,7 @@ int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr,
     // arm_light_fence();
 
     // 7. [Commit] 提交
-    entry->is_ready.store(1, std::memory_order_release);
+    entry->ready_seq.store(curr_tail + 1, std::memory_order_release);
 
     return remote_this->flow_result_after_enqueue_cached(curr_tail + 1, shadow_head, cached_threshold,
                                                          cached_threshold_version, "enqueue_success");
@@ -524,9 +550,14 @@ uint32_t MPSCRingBuffer::dequeue(void *buffer, uint32_t buffer_cap)
     uint64_t cur_head = head_.load(std::memory_order_relaxed);
     char *data_start = reinterpret_cast<char *>(this) + MPSCRingBuffer::GetDataOffset();
     Entry *entry = reinterpret_cast<Entry *>(data_start + ((cur_head & index_mask_) * entry_stride_));
+    const uint64_t expected_seq = cur_head + 1;
 
-    // 精确检查： is_ready 确定 Entry 是否就绪
-    if (entry->is_ready.load(std::memory_order_acquire) != 1) {
+    // 精确检查：ready_seq 确定 Entry 是否属于当前 head，避免跳过后晚提交产生 ABA。
+    if (entry->ready_seq.load(std::memory_order_acquire) != expected_seq) {
+        static thread_local uint32_t stale_reserved_probe = 0;
+        if (__builtin_expect((++stale_reserved_probe & STALE_RESERVED_PROBE_MASK) != 0, 1)) {
+            return 0;
+        }
         (void)try_skip_stale_reserved_entry(entry, cur_head);
         return 0;
     }
@@ -537,9 +568,9 @@ uint32_t MPSCRingBuffer::dequeue(void *buffer, uint32_t buffer_cap)
 
     std::memcpy(buffer, entry->data, copy_len);
     // 重置状态
-    entry->is_ready.store(0, std::memory_order_relaxed);
+    entry->ready_seq.store(0, std::memory_order_relaxed);
     // 推进 Head
-    head_.store(cur_head + 1, std::memory_order_release);
+    head_.store(expected_seq, std::memory_order_release);
     if (congested_.load(std::memory_order_acquire) != 0) {
         (void)sample_flow_state(approximate_used(), "dequeue");
     }

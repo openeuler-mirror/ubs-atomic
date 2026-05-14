@@ -190,11 +190,12 @@
 
 每个 Entry 由：
 
-- `is_ready`：生产者写完数据后置 1，消费者读取后置 0。
-- padding
+- `ready_seq`：生产者写完数据后写入 `tail + 1`，消费者仅在 `ready_seq == head + 1` 时读取该槽。
 - `data[]`：连续存放 `message_header_t` 和 body。
 
 队列大小要求为 2 的幂，因此槽位下标使用 `idx & index_mask_` 计算，避免取模开销。
+
+`ready_seq` 同时承担提交标志和序号校验两个作用。它替代简单的 `is_ready=1` 标志，避免消费者跳过半写槽后，原生产者晚提交旧槽位，后续环绕时被误认为新消息。
 
 ### Ring 区预留大小公式
 
@@ -218,9 +219,9 @@ ring_size = ring_header + entry_stride * ring_capacity
 
 ```text
 sizeof(MPSCRingBuffer) = 192
-sizeof(MPSCRingBuffer::Entry header) = 4
+sizeof(MPSCRingBuffer::Entry header) = 8
 ring_header = 192
-entry_stride = align64(4 + max_msg_size)
+entry_stride = align64(8 + max_msg_size)
 ```
 
 因此某节点的 Ring 区最小预留为：
@@ -273,7 +274,7 @@ python3 tools/calc_ub_comm_ring_region.py \
 - 通过 CAS 递增 `tail_` 抢占槽位。
 - CAS 失败时 debug 模式下增加 `cas_fail_count_`，然后 `yield`。
 - 把 header/body 拷贝到槽位。
-- `is_ready.store(1, release)` 提交给消费者。
+- `ready_seq.store(curr_tail + 1, release)` 提交给消费者。
 - 采样流控状态，返回 `UB_COMM_OK` 或 `UB_COMM_SEND_CONGESTED`。
 
 ### 远端发送
@@ -305,7 +306,7 @@ python3 tools/calc_ub_comm_ring_region.py \
 - 用 `cached_threshold` 和 `cached_threshold_version` 缓存目标 Ring 的流控阈值。
 - CAS 操作直接作用在远端 Ring 的 `tail_`。
 - CAS 超过 `MAX_CAS_RETRIES` 返回 `UB_COMM_ERR_RING_BUSY`。
-- 写入远端 Entry 后，置 `is_ready=1`。
+- 写入远端 Entry 后，写 `ready_seq=curr_tail+1` 提交。
 
 这个设计的核心是：发送快路径以本地估计为主，远端同步为辅。
 
@@ -384,7 +385,7 @@ try_populate_cache
 
 #### 并发与性能影响
 
-正常远端发送快路径只读本地 cache，避免查公告牌和读取远端不变量；远端共享内存操作主要集中在 `tail_` CAS、Entry 写入和 `is_ready` 提交。
+正常远端发送快路径只读本地 cache，避免查公告牌和读取远端不变量；远端共享内存操作主要集中在 `tail_` CAS、Entry 写入和 `ready_seq` 提交。
 
 会进入较重路径的场景包括：
 
@@ -612,12 +613,41 @@ otherwise          -> UB_COMM_QUEUE_NORMAL
 
 1. 读取当前 `head_`。
 2. 找到对应 Entry。
-3. 如果 `is_ready != 1`，返回 0 表示无数据。
-4. 根据 header 中的 `body_length` 计算真实消息长度。
-5. 拷贝到分发线程缓冲区。
-6. 清 `is_ready`。
-7. `head_.store(cur_head + 1, release)` 推进消费者位置。
-8. 采样流控状态，可能触发拥塞恢复日志。
+3. 计算期望提交序号 `expected_seq = head + 1`。
+4. 如果 `ready_seq != expected_seq`，返回 0 表示当前 head 槽尚不可读，并可能进入半写槽慢路径。
+5. 根据 header 中的 `body_length` 计算真实消息长度。
+6. 拷贝到分发线程缓冲区。
+7. 清 `ready_seq`。
+8. `head_.store(expected_seq, release)` 推进消费者位置。
+9. 采样流控状态，可能触发拥塞恢复日志。
+
+### 半写槽恢复
+
+半写槽指生产者已经通过 CAS 抢占 `tail_`，但进程在提交 `ready_seq` 前退出或长时间卡住。旧的单纯 `is_ready` 方案下，消费者看到 head 槽未 ready 会一直返回 0，即使后续槽位已经有完整消息，也会被这个脏槽阻塞。
+
+当前恢复方案遵循两个原则：
+
+- 生产者热路径不新增抢占时间戳写入，也不新增任何远端共享内存读写。
+- 消费者正常 ready 路径只做一次 `ready_seq` acquire load，不进入超时判断。
+
+具体逻辑：
+
+1. 生产者抢占槽位后只写消息数据，最后用 `ready_seq.store(curr_tail + 1, release)` 提交。这是原提交标志的等价替换，不额外增加远端写。
+2. 消费者读取当前 `head_` 后，只在 `ready_seq != head + 1` 时认为当前槽不可读。
+3. 为降低空转开销，不是每次不可读都做恢复判断，而是通过 `STALE_RESERVED_PROBE_MASK` 做采样，默认每 1024 次不可读检查一次慢路径。
+4. 慢路径先读 `tail_`。只有 `tail_ > head_` 时，才说明确实存在已经被生产者抢占但未提交的 head 槽；如果 `tail_ <= head_`，这是普通空队列。
+5. 消费者使用本线程本地状态记录该 Ring、该 `head_` 第一次被观测为“已抢占但未提交”的时间，时间源为本节点 `CLOCK_MONOTONIC`。
+6. 同一个 `head_` 连续超过 `HALF_WRITE_TIMEOUT_US` 后，消费者再次确认 `ready_seq != head + 1`，然后本地执行跳过：清该槽 `ready_seq`，并 `head_.store(head + 1, release)`。
+7. 跳过后下一轮轮询即可继续检查后续槽位，避免单个半写槽长期阻塞队列。
+
+这个方案不使用生产者写入的 wall clock 时间戳。跨节点时钟可能不同步，发送节点 A 写时间戳、接收节点 B 用本地时间判断会产生误判；因此超时窗口完全由接收节点的本地单调时钟观测得到。
+
+`ready_seq` 还用于防止跳过后的 ABA：
+
+- 如果消费者已经跳过 `head=N`，原生产者之后才恢复并把旧槽提交出来，写入的是 `ready_seq=N+1`。
+- 当环形队列未来再次绕回这个槽时，新的期望序号已经不是 `N+1`，消费者不会把旧提交误读成新消息。
+
+注意：`HALF_WRITE_TIMEOUT_US` 必须大于生产者正常写入最大耗时。阈值过小会把慢写误判为半写并丢弃该消息；阈值过大则半写槽恢复更慢。
 
 `dispatch_internal` 根据 `msg_type` 查找回调：
 
@@ -672,7 +702,7 @@ otherwise          -> UB_COMM_QUEUE_NORMAL
 - `ub_nt_store64` / `ub_nt_store8`：发布公告牌时使用 release store。
 - `arm_sfence`：确保公告牌 offset 和 initialized 的写入顺序。
 - `force_refresh_whole_struct`：读取远端公告牌前通过伪写刷新 cache line。
-- `is_ready.store(..., release)` / `load(..., acquire)`：保证 Entry 数据先于可读标志对消费者可见。
+- `ready_seq.store(..., release)` / `load(..., acquire)`：保证 Entry 数据先于可读序号对消费者可见。
 - `tail_` CAS：多生产者抢占槽位的核心同步点。
 
 ## 12. 已知约束
