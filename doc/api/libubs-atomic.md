@@ -203,7 +203,7 @@ void setup_log(void)
 | --- | --- | --- | --- |
 | `handle` | `ub_shm_comm_t *` | 输出通信实例句柄 | 非空；成功后写入不透明句柄 |
 | `init_region` | `ub_shm_area_t *` | 全局初始化公告牌共享内存 | 非空；`ptr` 指向共享内存，`size` 足够容纳公告牌 |
-| `ring_regions` | `ub_ring_region_map_t *` | 所有节点 Ring 区域映射 | 非空；`entries` 非空；`count` 为 `1~8` |
+| `ring_regions` | `ub_ring_region_map_t *` | 所有节点 Ring 区域映射 | 非空；`entries` 非空；`count` 为 `1~16` |
 | `conf` | `ub_comm_conf_t *` | 当前节点通信配置 | 非空；字段满足 2.2 中规格 |
 
 **约束与注意事项**
@@ -279,7 +279,7 @@ void setup_log(void)
 | --- | --- | --- | --- |
 | `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
 | `node_id` | `uint8_t` | 待查询节点 ID | 必须存在于当前节点映射表 |
-| `priority` | `uint8_t` | 待查询 Ring 优先级 | `0~7`；业务 Ring 通常为 `1~7` |
+| `priority` | `uint8_t` | 待查询 Ring 优先级 | `0~7`；业务 Ring 为 `1~7` |
 | `status` | `ub_comm_queue_status_t *` | 输出状态快照 | 非空 |
 
 **约束与注意事项**
@@ -356,7 +356,7 @@ void setup_log(void)
 | 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
 | --- | --- | --- | --- |
 | `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
-| `msg_type` | `uint8_t` | 消息类型 | 不应为系统保留值 `0xFF` 或 `0xFE`；业务建议避开 `0xFD` |
+| `msg_type` | `uint8_t` | 消息类型 | 不应为系统保留值 `0xFF`, `0xFE`或 `0xFD` |
 | `func_type` | `ub_func_type_t` | 回调执行方式 | `UB_FUNC_SYNC` 或 `UB_FUNC_ASYNC` |
 | `func` | `ub_callback_t` | 回调函数 | 非空 |
 | `ctx` | `void *` | 用户上下文 | 可为空；回调时原样传回 |
