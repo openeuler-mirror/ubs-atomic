@@ -88,7 +88,11 @@ MPSCRingBuffer::MPSCRingBuffer(uint8_t *buffer_start, uint32_t capacity, uint32_
     }
 
     // 确保初始化写入内存 (ARM Store Barrier)
+#if defined(__aarch64__) || defined(__arm__)
     asm volatile("dmb oshst" ::: "memory");
+#else
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
 }
 
 static uint64_t now_us()
@@ -361,7 +365,7 @@ int MPSCRingBuffer::enqueue_local(const void *hdr, const void *body, uint32_t bo
         }
         record_cas_fail();
         // CAS 失败会自动更新 curr_tail，CPU Relax
-        asm volatile("yield" ::: "memory");
+        cpu_relax_arm();
     }
 
     // 4. 计算地址 (本地直接算，复用 GetDataOffset 保证对齐)
@@ -437,7 +441,7 @@ int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr,
 
         // [防御 3] CPU Relax / Yield
         remote_this->record_cas_fail();
-        asm volatile("yield" ::: "memory");
+        cpu_relax_arm();
         // 继续下一轮循环，尝试抢新的 curr_tail
     }
 

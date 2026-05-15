@@ -62,7 +62,7 @@ struct alignas(UB_CACHELINE_SIZE) ub_rw_lock {
 
 inline void cpu_relax()
 {
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(__arm__)
     asm volatile("yield" ::: "memory"); // ARM hint, not OS yield
 #else
     asm volatile("" ::: "memory");
