@@ -4,7 +4,7 @@
 
 - 分布式共享内存通信队列：`include/ub_dist_comm_queue.h`
 - 分布式读写锁：`include/ub_dist_lock.h`
-- 分布式事务资源原子值：`include/ub_dist_tx_res.h`
+- 分布式事务资源：`include/ub_dist_tx_res.h`
 - 通用日志接口：三个头文件均暴露同一组 `ub_atomic_*` 日志接口
 
 接口默认支持 C/C++ 调用；C++ 场景下头文件使用 `extern "C"` 保持 C ABI。
@@ -101,8 +101,8 @@ void setup_log(void)
 
 **全局约束**
 
-- 当前最大节点数为 32。
-- 当前最大优先级级别为 8，即 `priority` 取值范围为 `0~7`。
+- 当前最大节点数为 16。
+- 当前最大优先级级别个数为 8，即 `priority` 取值范围为 `0~7`，数值越小级别越高，。
 - `priority == 0` 为内部分布式锁 Ring 和系统消息保留，业务 Ring 配置不得使用 0。
 - 系统保留消息类型包括 `0xFF`、`0xFE`、`0xFD`，业务侧不应直接发送或注册这些消息类型。
 - `ring_capacity` 必须是 2 的幂。
@@ -129,7 +129,7 @@ void setup_log(void)
 | 字段 | 类型 | 说明 | 参数有效性规格 |
 | --- | --- | --- | --- |
 | `entries` | `ub_ring_region_info_t *` | 所有节点 Ring 区域数组 | 非空；各节点看到的数组内容和顺序应保持一致 |
-| `count` | `uint8_t` | 数组元素个数 | 非 0，且不超过 8；应等于 `ub_comm_conf_t.max_nodes` |
+| `count` | `uint8_t` | 数组元素个数 | 非 0，且不超过 16；应等于 `ub_comm_conf_t.max_nodes` |
 
 #### `ub_ring_desc_t`
 
@@ -144,9 +144,9 @@ void setup_log(void)
 | 字段 | 类型 | 说明 | 参数有效性规格 |
 | --- | --- | --- | --- |
 | `cpu_id` | `int32_t` | 分发线程绑核 CPU ID | 小于 0 表示不绑核；非负值应为有效 CPU ID |
-| `max_nodes` | `uint8_t` | 集群最大节点数 | `1~8` |
+| `max_nodes` | `uint8_t` | 集群最大节点数 | `1~16` |
 | `current_node_id` | `uint8_t` | 当前节点 ID | 必须存在于 `ring_regions.entries` 中 |
-| `num_rings` | `uint8_t` | 当前节点创建的业务 Ring 数量 | `1~8`，且不包含内部保留 Ring |
+| `num_rings` | `uint8_t` | 当前节点创建的业务 Ring 数量 | `1~7`，且不包含内部保留 Ring |
 | `ring_descs` | `ub_ring_desc_t *` | Ring 配置数组 | 非空，长度至少为 `num_rings` |
 
 #### `message_header_t` 与 `message_t`
