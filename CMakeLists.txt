@@ -24,8 +24,12 @@ set(3RDPARTY_DIR ${PROJECT_SOURCE_DIR}/3rdparty)
 set(UBS_ATOMIC_COMMON_FLAGS "")
 set(SECURE_LD_FLAGS "-Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now -pie -Wl,--build-id=none")
 set(SECURE_C_FLAGS "-fstack-protector-strong")
-# LST原子指令集编译选项
-set(MARCH_FLAGS "-march=armv8-a+lse")
+# LSE 原子指令集编译选项。仅 ARM64 编译器支持，x86 本地编译时不能传入。
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(MARCH_FLAGS "-march=armv8-a+lse")
+else()
+    set(MARCH_FLAGS "")
+endif()
 set(COMMON_FLAGS "-fno-omit-frame-pointer ${SECURE_C_FLAGS} ${SECURE_LD_FLAGS} ${UBS_ATOMIC_COMMON_FLAGS} ${MARCH_FLAGS}")
 
 if (CMAKE_BUILD_TYPE MATCHES "^[Dd]ebug")

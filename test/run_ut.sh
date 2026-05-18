@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
  
 CURRENT_PATH=$(cd "$(dirname "$0")"; pwd)
 echo "${CURRENT_PATH:?}"
@@ -11,7 +12,10 @@ remove_static()
     find ${dir} -type f -name "*.cpp" | xargs -i sed -i "s/\bstatic\b//g" {}
 }
 
-remove_static ${code_dir}/src/smap
+has_cmd()
+{
+    command -v "$1" >/dev/null 2>&1
+}
 
 build_dir=build
 
@@ -36,19 +40,44 @@ fi
 cd ${code_dir}/test
 
 cmake -S . -B ${build_dir}
-echo "====== 开始编译 ubturbo_tdsql_ut ======"
-cmake --build ${build_dir} --target ubturbo_tdsql_ut -j$(nproc) || exit 1
-echo "====== ubturbo_tdsql_ut 编译完成"
+echo "====== 开始编译 ubs_atomic_ut ======"
+cmake --build ${build_dir} --target ubs_atomic_ut -j$(nproc) || exit 1
+echo "====== ubs_atomic_ut 编译完成"
 
 cd ${build_dir}
-lcov --directory . --zerocounters
-echo "====== 开始执行 ubturbo_tdsql_ut ======"
-./ubturbo_tdsql_ut
+if has_cmd lcov; then
+    lcov --directory . --zerocounters
+else
+    echo "====== 未安装 lcov，跳过覆盖率清零 ======"
+fi
 
-lcov --d . --c --output-file ./test.info --rc lcov_branch_coverage=1
-lcov -e ./test.info "*/src/*" -output-file ./coverage.info --rc lcov_branch_coverage=1
+echo "====== 开始执行 ubs_atomic_ut ======"
+./ubs_atomic_ut
+echo "====== ubs_atomic_ut 执行完成 ======"
 
-lcov --remove ./coverage.info "*/src/*.h" -o ../build/coverage.info --rc lcov_branch_coverage=1
-lcov --remove ./coverage.info "*/test/3rdparty/googletest/googletest/src/*" -o ./coverage.info --rc lcov_branch_coverage=1
+if ! has_cmd lcov || ! has_cmd genhtml; then
+    echo "====== 未安装 lcov/genhtml，跳过覆盖率报告生成 ======"
+    exit 0
+fi
 
-genhtml -o ./gcovr_report ./coverage.info --show-details --legend --rc lcov_branch_coverage=1
+# 1. 收集覆盖率（忽略所有错误）
+lcov -c -d . -o test.info \
+    --rc branch_coverage=1 \
+    --rc geninfo_unexecuted_blocks=1 \
+    --ignore-errors inconsistent,deprecated,mismatch,unused,corrupt
+
+# 2. 只保留 src 目录代码
+lcov -e test.info "*/src/*" -o coverage.info \
+    --rc branch_coverage=1 \
+    --ignore-errors unused
+
+# 3. 移除头文件
+lcov --remove coverage.info "*/src/*.h" -o coverage.info \
+    --rc branch_coverage=1 \
+    --ignore-errors unused
+
+# 4. 生成报告
+genhtml coverage.info -o gcovr_report \
+    --branch-coverage \
+    --show-details \
+    --legend

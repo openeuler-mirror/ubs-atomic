@@ -58,13 +58,22 @@ UBShmTransport::~UBShmTransport()
 // ===========================================================================
 inline void ub_nt_store64(volatile uint64_t *addr, uint64_t val)
 {
+#if defined(__aarch64__) || defined(__arm__)
     asm volatile("stlr %0, [%1]" ::"r"(val), "r"(addr) : "memory");
+#else
+    reinterpret_cast<std::atomic<uint64_t> *>(const_cast<uint64_t *>(addr))
+        ->store(val, std::memory_order_release);
+#endif
 }
 
 inline void ub_nt_store8(volatile void *addr, uint8_t val)
 {
+#if defined(__aarch64__) || defined(__arm__)
     // 8-bit 使用 stlrb (Store-Release Byte)，配合 sfence 足够安全
     asm volatile("stlrb %w0, [%1]" ::"r"((uint32_t)val), "r"(addr) : "memory");
+#else
+    reinterpret_cast<std::atomic<uint8_t> *>(const_cast<void *>(addr))->store(val, std::memory_order_release);
+#endif
 }
 
 inline void force_refresh_whole_struct(NodeBoardInfo *node)
