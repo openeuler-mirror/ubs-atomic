@@ -189,6 +189,26 @@ void setup_log(void)
 | `UB_COMM_QUEUE_CONGESTED` | `used >= congestion_threshold && used < total` |
 | `UB_COMM_QUEUE_FULL` | `used >= total` |
 
+#### `ub_comm_queue_heartbeat_config_t`
+
+| 字段 | 类型 | 说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `size` | `uint32_t` | 结构体大小，用于 ABI 版本识别 | 调用前填为 `sizeof(ub_comm_queue_heartbeat_config_t)` |
+| `heartbeat_interval_ms` | `uint32_t` | 本节点消费者心跳序号刷新周期，单位毫秒 | 必须大于 0 |
+| `check_interval_ms` | `uint32_t` | 本节点生产者心跳监控线程轮询周期，单位毫秒 | 必须大于 0 |
+| `timeout_ms` | `uint32_t` | peer 心跳序号长时间不变化时的超时阈值，单位毫秒 | 必须大于 0，且不小于 `max(3 * heartbeat_interval_ms, 2 * check_interval_ms)` |
+
+#### `ub_comm_queue_heartbeat_status_t`
+
+| 字段 | 类型 | 说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `size` | `uint32_t` | 结构体大小，用于 ABI 版本识别 | 调用前填为 `sizeof(ub_comm_queue_heartbeat_status_t)` |
+| `timeout_ms` | `uint32_t` | 当前本节点使用的心跳超时阈值，单位毫秒 | 输出字段 |
+| `last_observed_seq` | `uint64_t` | 本节点最近观察到的目标节点心跳序号 | 输出字段 |
+| `last_change_age_ms` | `uint64_t` | 从本节点最后一次观察到序号变化到现在的本地单调时间差，单位毫秒 | 输出字段；`UINT64_MAX` 表示尚未观察到有效心跳 |
+| `node_id` | `uint8_t` | 被查询节点 ID | 输出字段 |
+| `alive` | `uint8_t` | 本节点对目标节点消费者是否存活的本地判断 | 输出字段；`1` 表示存活，`0` 表示超时或未知 |
+
 ### 2.3 `ub_comm_queue_init`
 
 | 项目 | 内容 |
@@ -308,7 +328,78 @@ void setup_log(void)
 - 只更新当前节点本地 Ring。远端生产者写入该 Ring 时会从共享 Ring 对象读取到新阈值。
 - 默认阈值语义可用 `80` 恢复到常见的 80% 水位。
 
-### 2.8 `ub_comm_queue_check_ready`
+### 2.8 `ub_comm_queue_config_heartbeat`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_comm_queue_config_heartbeat` |
+| 接口描述 | 设置或查询当前通信实例的本地心跳配置。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle, const ub_comm_queue_heartbeat_config_t *request, ub_comm_queue_heartbeat_config_t *effective);` |
+| 返回参数 | 成功返回 `0`；失败返回负数错误码。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
+| `request` | `const ub_comm_queue_heartbeat_config_t *` | 请求设置的心跳配置 | 可为空；非空时 `size` 必须不小于 `sizeof(ub_comm_queue_heartbeat_config_t)`，且字段满足 2.2 中规格 |
+| `effective` | `ub_comm_queue_heartbeat_config_t *` | 输出最终生效配置 | 可为空；非空时调用前 `size` 必须不小于 `sizeof(ub_comm_queue_heartbeat_config_t)` |
+
+**约束与注意事项**
+
+- `request == NULL && effective != NULL` 表示只查询当前配置。
+- `request != NULL && effective == NULL` 表示只设置配置。
+- `request != NULL && effective != NULL` 表示设置后返回最终生效配置。
+- `request` 和 `effective` 不能同时为 `NULL`。
+- 该接口只影响后台心跳线程，不修改收发热路径。
+- `size` 是 ABI 版本识别字段；后续新增字段应追加在结构体尾部，并通过 `size` 判断调用方版本。
+
+**使用样例**
+
+```c
+ub_comm_queue_heartbeat_config_t req = {
+    .size = sizeof(ub_comm_queue_heartbeat_config_t),
+    .heartbeat_interval_ms = 100,
+    .check_interval_ms = 100,
+    .timeout_ms = 1000,
+};
+ub_comm_queue_heartbeat_config_t eff = {
+    .size = sizeof(ub_comm_queue_heartbeat_config_t),
+};
+int ret = ub_comm_queue_config_heartbeat(&handle, &req, &eff);
+```
+
+### 2.9 `ub_comm_queue_get_heartbeat_status`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_comm_queue_get_heartbeat_status` |
+| 接口描述 | 查询本节点对指定节点消费者心跳的本地观察状态。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_comm_queue_get_heartbeat_status(ub_shm_comm_t *handle, uint8_t node_id, ub_comm_queue_heartbeat_status_t *status);` |
+| 返回参数 | 成功返回 `0`；失败返回负数错误码。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
+| `node_id` | `uint8_t` | 待查询节点 ID | 必须存在于当前节点映射表 |
+| `status` | `ub_comm_queue_heartbeat_status_t *` | 输出心跳观察状态 | 非空；调用前 `size` 必须不小于 `sizeof(ub_comm_queue_heartbeat_status_t)` |
+
+**约束与注意事项**
+
+- 该接口只读本节点本地观察状态，不直接读取远端共享内存。
+- `last_change_age_ms` 基于本节点本地单调时钟计算，不依赖跨节点时钟同步。
+- `size` 是 ABI 版本识别字段；后续新增字段应追加在结构体尾部，并通过 `size` 判断调用方版本。
+
+**使用样例**
+
+```c
+ub_comm_queue_heartbeat_status_t st = {
+    .size = sizeof(ub_comm_queue_heartbeat_status_t),
+};
+int ret = ub_comm_queue_get_heartbeat_status(&handle, 1, &st);
+```
+
+### 2.10 `ub_comm_queue_check_ready`
 
 | 项目 | 内容 |
 | --- | --- |
@@ -327,7 +418,27 @@ void setup_log(void)
 
 - 当前不建议业务依赖该接口完成收包；请优先使用 `ub_comm_queue_register_process_func` 注册回调。
 
-### 2.10 `ub_comm_queue_register_process_func`
+### 2.11 `ub_comm_queue_recv`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_comm_queue_recv` |
+| 接口描述 | 主动接收消息接口。当前主要收包路径为后台分发线程和回调派发。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_comm_queue_recv(ub_shm_comm_t *handle, void *buffer, uint32_t length);` |
+| 返回参数 | 当前实现返回 `0`。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
+| `buffer` | `void *` | 接收缓冲区 | 当前实现未使用 |
+| `length` | `uint32_t` | 接收缓冲区长度 | 当前实现未使用 |
+
+**约束与注意事项**
+
+- 当前不建议业务依赖该接口完成收包；请优先使用 `ub_comm_queue_register_process_func` 注册回调。
+
+### 2.12 `ub_comm_queue_register_process_func`
 
 | 项目 | 内容 |
 | --- | --- |
@@ -349,133 +460,6 @@ void setup_log(void)
 
 - 同一个 `msg_type` 重复注册会覆盖旧回调。
 - 已经被分发线程取出或已投递线程池的消息可能仍使用旧回调执行。
-
-## 通信队列心跳配置与查询
-
-心跳功能用于让发送端在后台感知目标节点消费者是否还在推进。发送热路径不读取共享心跳字段，只读取本地 `peer_alive_` 快照。
-
-### 为什么不用时间戳
-
-共享内存中的心跳字段不保存 wall clock 时间戳，而保存单调递增的 `consumer_heartbeat_seq`。原因是跨节点机器时间可能不同步，也可能被 NTP 调整或回拨。如果节点 B 写入自己的时间戳，节点 A 用本地时间做差，可能误判。
-
-当前模型是：
-
-1. 消费者后台线程周期性递增 `consumer_heartbeat_seq`。
-2. 生产者后台监控线程轮询远端序号。
-3. 序号变化时，生产者用本地 `CLOCK_MONOTONIC` 记录观察时间。
-4. 序号超过本地超时阈值未变化时，生产者把本地 `peer_alive_` 标记为 false。
-
-### 配置接口
-
-```c
-typedef struct {
-    uint32_t size;
-    uint32_t heartbeat_interval_ms;
-    uint32_t check_interval_ms;
-    uint32_t timeout_ms;
-} ub_comm_queue_heartbeat_config_t;
-
-int ub_comm_queue_config_heartbeat(
-    ub_shm_comm_t *handle,
-    const ub_comm_queue_heartbeat_config_t *request,
-    ub_comm_queue_heartbeat_config_t *effective);
-```
-
-调用方式：
-
-- `request == NULL && effective != NULL`：查询当前配置。
-- `request != NULL && effective == NULL`：设置配置。
-- `request != NULL && effective != NULL`：设置并返回最终生效配置。
-
-字段说明：
-
-- `size`：调用方填 `sizeof(ub_comm_queue_heartbeat_config_t)`。
-- `heartbeat_interval_ms`：本节点消费者心跳序号刷新周期。
-- `check_interval_ms`：本节点生产者心跳监控轮询周期。
-- `timeout_ms`：本节点观察到 peer 心跳序号不变化的超时阈值。
-
-默认值：
-
-```text
-heartbeat_interval_ms = 100
-check_interval_ms     = 100
-timeout_ms            = 1000
-```
-
-校验规则：
-
-- 三个时间参数必须大于 0。
-- `timeout_ms >= max(3 * heartbeat_interval_ms, 2 * check_interval_ms)`。
-
-### 状态查询接口
-
-```c
-typedef struct {
-    uint32_t size;
-    uint32_t timeout_ms;
-    uint64_t last_observed_seq;
-    uint64_t last_change_age_ms;
-    uint8_t node_id;
-    uint8_t alive;
-    uint16_t reserved;
-} ub_comm_queue_heartbeat_status_t;
-
-int ub_comm_queue_get_heartbeat_status(
-    ub_shm_comm_t *handle,
-    uint8_t node_id,
-    ub_comm_queue_heartbeat_status_t *status);
-```
-
-字段说明：
-
-- `size`：调用方填 `sizeof(ub_comm_queue_heartbeat_status_t)`。
-- `timeout_ms`：当前本节点使用的心跳超时阈值。
-- `last_observed_seq`：本节点最近观察到的目标节点心跳序号。
-- `last_change_age_ms`：距离上一次观察到序号变化的本地单调时间；`UINT64_MAX` 表示尚未观察到有效心跳。
-- `node_id`：被查询节点。
-- `alive`：当前本地 `peer_alive_` 快照。
-- `reserved`：对齐字段，调用方忽略。
-
-### 关于 `size` 和 reserved
-
-`size` 是 C ABI 演进字段。结构体一旦作为公共 API 发布，后续如果直接修改已有字段布局，会破坏老版本二进制兼容。调用方传入 `size` 后，库可以判断调用方使用的结构体版本，未来在结构体尾部追加字段时仍能兼容旧调用方。
-
-本方案没有大量预留字段。配置结构体不额外保留 reserved；状态结构体只有一个 `uint16_t reserved`，用于显式对齐并避免尾部 padding 语义不清。调用方不应读取或依赖 reserved。
-
-### 示例
-
-查询当前配置：
-
-```c
-ub_comm_queue_heartbeat_config_t cfg = {
-    .size = sizeof(ub_comm_queue_heartbeat_config_t),
-};
-int ret = ub_comm_queue_config_heartbeat(&handle, NULL, &cfg);
-```
-
-设置并确认配置：
-
-```c
-ub_comm_queue_heartbeat_config_t req = {
-    .size = sizeof(ub_comm_queue_heartbeat_config_t),
-    .heartbeat_interval_ms = 100,
-    .check_interval_ms = 100,
-    .timeout_ms = 1000,
-};
-ub_comm_queue_heartbeat_config_t eff = {
-    .size = sizeof(ub_comm_queue_heartbeat_config_t),
-};
-int ret = ub_comm_queue_config_heartbeat(&handle, &req, &eff);
-```
-
-查询节点状态：
-
-```c
-ub_comm_queue_heartbeat_status_t st = {
-    .size = sizeof(ub_comm_queue_heartbeat_status_t),
-};
-int ret = ub_comm_queue_get_heartbeat_status(&handle, 1, &st);
-```
 
 **通信队列使用样例**
 

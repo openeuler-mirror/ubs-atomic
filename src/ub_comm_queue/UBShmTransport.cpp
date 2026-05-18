@@ -123,7 +123,6 @@ struct FlowConfigUpdateMessage {
     uint64_t version;
     uint32_t threshold;
     uint8_t priority;
-    uint8_t reserved[3];
 };
 static_assert(sizeof(FlowConfigUpdateMessage) <= LOCK_RING_MSG_SIZE - sizeof(message_header_t),
               "Flow config update body is too large for lock ring");
@@ -1176,16 +1175,19 @@ int UBShmTransport::get_status(uint8_t node_id, uint8_t priority, ub_comm_queue_
 
 int UBShmTransport::set_congestion_threshold(uint8_t priority, uint32_t congestion_threshold_percent)
 {
-    if (priority == LOCK_RING_PRIORITY || priority >= MAX_PRIORITY_LEVELS) {
+    if (priority == LOCK_RING_PRIORITY || priority >= MAX_PRIORITY_LEVELS)
+    {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid priority %u", priority);
         return -EINVAL;
     }
     MPSCRingBuffer *ring = local_rings_[priority];
-    if (ring == nullptr) {
+    if (ring == nullptr)
+    {
         return UB_COMM_ERR_RING_NOT_FOUND;
     }
     int ret = ring->configure_congestion_threshold(congestion_threshold_percent);
-    if (ret != UB_COMM_OK) {
+    if (ret != UB_COMM_OK)
+    {
         return ret;
     }
 
@@ -1194,25 +1196,30 @@ int UBShmTransport::set_congestion_threshold(uint8_t priority, uint32_t congesti
 }
 
 int UBShmTransport::config_heartbeat(const ub_comm_queue_heartbeat_config_t *request,
-                                      ub_comm_queue_heartbeat_config_t *effective)
+                                     ub_comm_queue_heartbeat_config_t *effective)
 {
-    if (request == nullptr && effective == nullptr) {
+    if (request == nullptr && effective == nullptr)
+    {
         return -EINVAL;
     }
-    if (effective != nullptr && effective->size < sizeof(ub_comm_queue_heartbeat_config_t)) {
+    if (effective != nullptr)
+    {
         return -EINVAL;
     }
 
-    if (request != nullptr) {
-        if (request->size < sizeof(ub_comm_queue_heartbeat_config_t) ||
+    if (request != nullptr)
+    {
+        if (
             request->heartbeat_interval_ms == 0 || request->check_interval_ms == 0 ||
-            request->timeout_ms == 0) {
+            request->timeout_ms == 0)
+        {
             return -EINVAL;
         }
 
         uint64_t min_timeout_ms = std::max<uint64_t>(static_cast<uint64_t>(request->heartbeat_interval_ms) * 3ULL,
                                                      static_cast<uint64_t>(request->check_interval_ms) * 2ULL);
-        if (static_cast<uint64_t>(request->timeout_ms) < min_timeout_ms) {
+        if (static_cast<uint64_t>(request->timeout_ms) < min_timeout_ms)
+        {
             return -EINVAL;
         }
 
@@ -1227,14 +1234,14 @@ int UBShmTransport::config_heartbeat(const ub_comm_queue_heartbeat_config_t *req
                    request->heartbeat_interval_ms, request->check_interval_ms, request->timeout_ms);
     }
 
-    if (effective != nullptr) {
+    if (effective != nullptr)
+    {
         effective->heartbeat_interval_ms =
             static_cast<uint32_t>(heartbeat_interval_us_.load(std::memory_order_acquire) / US_PER_MS);
         effective->check_interval_ms =
             static_cast<uint32_t>(heartbeat_check_interval_us_.load(std::memory_order_acquire) / US_PER_MS);
         effective->timeout_ms =
             static_cast<uint32_t>(heartbeat_timeout_us_.load(std::memory_order_acquire) / US_PER_MS);
-        effective->size = sizeof(ub_comm_queue_heartbeat_config_t);
     }
 
     return UB_COMM_OK;
@@ -1242,10 +1249,12 @@ int UBShmTransport::config_heartbeat(const ub_comm_queue_heartbeat_config_t *req
 
 int UBShmTransport::get_heartbeat_status(uint8_t node_id, ub_comm_queue_heartbeat_status_t *status)
 {
-    if (status == nullptr || status->size < sizeof(ub_comm_queue_heartbeat_status_t)) {
+    if (status == nullptr)
+    {
         return -EINVAL;
     }
-    if (get_compact_index(node_id) < 0 || node_id >= MAX_NODES_LIMIT) {
+    if (get_compact_index(node_id) < 0 || node_id >= MAX_NODES_LIMIT)
+    {
         return UB_COMM_ERR_PEER_NODE_NOT_FOUND;
     }
 
@@ -1255,26 +1264,28 @@ int UBShmTransport::get_heartbeat_status(uint8_t node_id, ub_comm_queue_heartbea
     uint64_t seq = 0;
     bool alive = false;
 
-    if (node_id == conf_.current_node_id) {
+    if (node_id == conf_.current_node_id)
+    {
         seq = local_consumer_heartbeat_seq_.load(std::memory_order_acquire);
         alive = init_complete_;
         age_ms = 0;
-    } else {
+    }
+    else
+    {
         seq = peer_heartbeat_seq_[node_id].load(std::memory_order_acquire);
         last_seen = peer_heartbeat_seen_us_[node_id].load(std::memory_order_acquire);
         alive = peer_alive_[node_id].load(std::memory_order_acquire);
-        if (last_seen != 0 && now >= last_seen) {
+        if (last_seen != 0 && now >= last_seen)
+        {
             age_ms = (now - last_seen) / US_PER_MS;
         }
     }
 
-    status->size = sizeof(ub_comm_queue_heartbeat_status_t);
     status->timeout_ms = static_cast<uint32_t>(heartbeat_timeout_us_.load(std::memory_order_acquire) / US_PER_MS);
     status->last_observed_seq = seq;
     status->last_change_age_ms = age_ms;
     status->node_id = node_id;
     status->alive = alive ? 1 : 0;
-    status->reserved = 0;
     return UB_COMM_OK;
 }
 

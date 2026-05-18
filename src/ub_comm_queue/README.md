@@ -114,7 +114,7 @@
 - `last_change_age_ms`：从本节点最后一次观察到序号变化到现在的本地单调时间差；`UINT64_MAX` 表示尚未观察到有效心跳。
 - `timeout_ms`：当前本节点使用的心跳超时阈值。
 
-状态结构体同样带 `size` 字段，用于 ABI 演进。`reserved` 只是显式对齐字段，调用方应忽略。
+
 
 ### `ub_comm_queue_recv`
 

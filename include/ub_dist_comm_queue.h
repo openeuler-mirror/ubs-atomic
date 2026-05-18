@@ -109,20 +109,17 @@ typedef struct {
 } ub_comm_queue_status_t;
 
 typedef struct {
-    uint32_t size;                  /* sizeof(ub_comm_queue_heartbeat_config_t) */
     uint32_t heartbeat_interval_ms; /* local consumer heartbeat sequence update interval */
     uint32_t check_interval_ms;     /* local producer heartbeat monitor polling interval */
     uint32_t timeout_ms;            /* peer timeout if heartbeat sequence does not advance */
 } ub_comm_queue_heartbeat_config_t;
 
 typedef struct {
-    uint32_t size;               /* sizeof(ub_comm_queue_heartbeat_status_t) */
-    uint32_t timeout_ms;         /* effective timeout used by this local node */
     uint64_t last_observed_seq;  /* last peer heartbeat sequence observed locally */
     uint64_t last_change_age_ms; /* local monotonic age since sequence last advanced; UINT64_MAX means never observed */
+    uint32_t timeout_ms;         /* effective timeout used by this local node */
     uint8_t node_id;             /* queried node ID */
     uint8_t alive;               /* local peer_alive snapshot */
-    uint16_t reserved;           /* alignment, must be ignored by callers */
 } ub_comm_queue_heartbeat_status_t;
 
 /*
