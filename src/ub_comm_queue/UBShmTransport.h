@@ -109,6 +109,9 @@ public:
     int recv(void *buffer, size_t capacity);
     int get_status(uint8_t node_id, uint8_t priority, ub_comm_queue_status_t *status);
     int set_congestion_threshold(uint8_t priority, uint32_t congestion_threshold_percent);
+    int config_heartbeat(const ub_comm_queue_heartbeat_config_t *request,
+                         ub_comm_queue_heartbeat_config_t *effective);
+    int get_heartbeat_status(uint8_t node_id, ub_comm_queue_heartbeat_status_t *status);
 
     void remove_node_cache(uint32_t node_id);
     void update_cached_congestion_threshold(uint32_t node_id, uint8_t priority, uint32_t threshold, uint64_t version);
@@ -236,9 +239,12 @@ private:
     std::atomic<bool> stop_flag_;
     std::atomic<bool> reliability_stop_flag_;
     std::array<std::atomic<bool>, MAX_NODES_LIMIT> peer_alive_;
-    std::array<uint64_t, MAX_NODES_LIMIT> peer_heartbeat_seq_;
-    std::array<uint64_t, MAX_NODES_LIMIT> peer_heartbeat_seen_us_;
-    uint64_t local_consumer_heartbeat_seq_;
+    std::array<std::atomic<uint64_t>, MAX_NODES_LIMIT> peer_heartbeat_seq_;
+    std::array<std::atomic<uint64_t>, MAX_NODES_LIMIT> peer_heartbeat_seen_us_;
+    std::atomic<uint64_t> local_consumer_heartbeat_seq_;
+    std::atomic<uint64_t> heartbeat_interval_us_;
+    std::atomic<uint64_t> heartbeat_check_interval_us_;
+    std::atomic<uint64_t> heartbeat_timeout_us_;
     uint32_t max_msg_size_global_;
     // 是否为锁实例
     bool is_for_lock;

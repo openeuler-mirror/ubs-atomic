@@ -79,6 +79,43 @@
 
 `0~100` 为合法百分比。`0` 表示阈值为 0，所有非满状态（包含空 Ring）都按拥塞状态上报；恢复默认阈值时显式设置 `80`。
 
+### `ub_comm_queue_config_heartbeat`
+
+设置和查询本节点心跳配置。该接口不修改 `ub_comm_conf_t`，因此不破坏已有初始化 ABI。
+
+调用方式：
+
+- `request == NULL && effective != NULL`：只查询当前配置。
+- `request != NULL && effective == NULL`：只设置。
+- `request != NULL && effective != NULL`：设置后返回最终生效配置，推荐用于确认参数。
+
+配置项均为毫秒：
+
+- `heartbeat_interval_ms`：本节点消费者心跳序号刷新周期。
+- `check_interval_ms`：本节点生产者心跳监控线程轮询周期。
+- `timeout_ms`：本节点观察到某个 peer 心跳序号超过该时间不变化时，认为 peer 消费者超时。
+
+校验规则：
+
+- `heartbeat_interval_ms`、`check_interval_ms`、`timeout_ms` 均必须大于 0。
+- `timeout_ms >= max(3 * heartbeat_interval_ms, 2 * check_interval_ms)`，避免过小阈值造成抖动误判。
+
+结构体中保留 `size` 字段是为了 ABI 演进。调用方需要将 `size` 填为 `sizeof(ub_comm_queue_heartbeat_config_t)`；未来若结构体尾部追加字段，库可以通过 `size` 判断调用方使用的新旧版本。
+
+### `ub_comm_queue_get_heartbeat_status`
+
+查询本节点对某个节点消费者心跳的本地观察状态。该接口只读本地状态，不读远端共享内存，不影响发送热路径。
+
+返回内容包括：
+
+- `node_id`：被查询节点。
+- `alive`：当前本地 `peer_alive_` 快照。
+- `last_observed_seq`：本节点最近观察到的远端心跳序号。
+- `last_change_age_ms`：从本节点最后一次观察到序号变化到现在的本地单调时间差；`UINT64_MAX` 表示尚未观察到有效心跳。
+- `timeout_ms`：当前本节点使用的心跳超时阈值。
+
+状态结构体同样带 `size` 字段，用于 ABI 演进。`reserved` 只是显式对齐字段，调用方应忽略。
+
 ### `ub_comm_queue_recv`
 
 当前 `UBShmTransport::recv` 实现返回 `0`，主要收包路径是后台分发线程加回调派发。主动拉取接口保留但尚未实现完整读取逻辑。
@@ -656,7 +693,8 @@ otherwise          -> UB_COMM_QUEUE_NORMAL
 - 消费者本地后台线程定时执行 `consumer_heartbeat_seq.store(++local_seq, release)`。
 - 生产者本地后台监控线程轮询远端 `consumer_heartbeat_seq`。
 - 如果监控线程看到远端序号变化，就用本节点 `CLOCK_MONOTONIC` 记录 `last_seen_us`。
-- 如果序号长时间不变化，且本地 `now_us - last_seen_us > CONSUMER_HEARTBEAT_TIMEOUT_US`，则把本地 `peer_alive_[node_id]` 标记为 false。
+- 如果序号长时间不变化，且本地 `now_us - last_seen_us > heartbeat_timeout_us_`，则把本地 `peer_alive_[node_id]` 标记为 false。
+- `heartbeat_interval_us_`、`heartbeat_check_interval_us_`、`heartbeat_timeout_us_` 可通过 `ub_comm_queue_config_heartbeat` 运行期调整。
 - 发送热路径只读取本地 `peer_alive_` 快照，不读取共享心跳字段。
 
 这样共享内存心跳字段只表达“对端消费者线程还在推进”，不表达任何时间语义。发送节点不会拿接收节点写入的 wall clock 与本地时间做差，因此不受跨节点时钟不同步、NTP 调整或系统时间回拨影响。

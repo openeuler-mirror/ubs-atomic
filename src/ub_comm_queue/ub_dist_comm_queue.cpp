@@ -126,6 +126,29 @@ int ub_comm_queue_set_congestion_threshold(ub_shm_comm_t *handle, uint8_t priori
     return tspt->set_congestion_threshold(priority, congestion_threshold_percent);
 }
 
+int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle,
+                                   const ub_comm_queue_heartbeat_config_t *request,
+                                   ub_comm_queue_heartbeat_config_t *effective)
+{
+    if (handle == nullptr || *handle == nullptr) {
+        return -EINVAL;
+    }
+
+    UBShmTransport *tspt = static_cast<UBShmTransport *>(*handle);
+    return tspt->config_heartbeat(request, effective);
+}
+
+int ub_comm_queue_get_heartbeat_status(ub_shm_comm_t *handle, uint8_t node_id,
+                                       ub_comm_queue_heartbeat_status_t *status)
+{
+    if (handle == nullptr || *handle == nullptr || status == nullptr) {
+        return -EINVAL;
+    }
+
+    UBShmTransport *tspt = static_cast<UBShmTransport *>(*handle);
+    return tspt->get_heartbeat_status(node_id, status);
+}
+
 int ub_comm_queue_recv(ub_shm_comm_t *handle, void *buffer, uint32_t length)
 {
     if (handle == nullptr || *handle == nullptr || buffer == nullptr) {
