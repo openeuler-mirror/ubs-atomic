@@ -26,11 +26,19 @@ extern "C" {
 
 /* Shared-memory size reserved for the distributed read-write lock. 640B */
 #define UB_RW_LOCK_SIZE (640)
+/* Shared-memory size reserved for the distributed mutex lock. */
+#define UB_MUTEX_LOCK_SIZE (384)
+/* Shared-memory size reserved for the distributed spin lock. */
+#define UB_SPIN_LOCK_SIZE (64)
 /* Timestamp type in milliseconds */
 typedef uint64_t time_ms_t;
 
 /* Shared-memory layout of the distributed read-write lock */
 typedef struct ub_rw_lock ub_rw_lock_t;
+/* Shared-memory layout of the distributed mutex lock */
+typedef struct ub_mutex_lock ub_mutex_lock_t;
+/* Shared-memory layout of the distributed spin lock */
+typedef struct ub_spin_lock ub_spin_lock_t;
 
 typedef enum {
     UB_LOCK_S = 0,  /* shared (read) lock */
@@ -180,7 +188,57 @@ ub_lock_result_t ub_rw_lock_query_holder(ub_rw_lock_t *lock, const ub_location_t
 ub_lock_result_t ub_rw_lock_rebuild(ub_rw_lock_t *old_lock, ub_rw_lock_t *new_lock,
                                     const ub_lock_rebuild_info_t *rebuild_info, const ub_location_t *location);
 
+/*
+ * @brief Initialize a distributed mutex lock.
+ * @param[in] lock       : pointer to shared-memory mutex lock object
+ */
+void ub_mutex_lock_create(ub_mutex_lock_t *lock);
 
+/*
+ * @brief Release per-node resources associated with the mutex lock.
+ * @param[in] lock       : pointer to shared-memory mutex lock object
+ */
+void ub_mutex_lock_free(ub_mutex_lock_t *lock);
+
+/*
+ * @brief Acquire the mutex lock.
+ * @param[in] lock       : pointer to shared-memory mutex lock object
+ * @param[in] timeout_ms : lock timeout in milliseconds, 0 means default 10000ms
+ * @param[in] location   : caller location (node/thread)
+ * @return lock result status
+ */
+ub_lock_result_t ub_mutex_lock(ub_mutex_lock_t *lock, time_ms_t timeout_ms, const ub_location_t *location);
+
+/*
+ * @brief Release the mutex lock.
+ * @param[in] lock       : pointer to shared-memory mutex lock object
+ * @param[in] location   : caller location (node/thread)
+ * @return lock result status
+ */
+ub_lock_result_t ub_mutex_unlock(ub_mutex_lock_t *lock, const ub_location_t *location);
+
+/*
+ * @brief Initialize a distributed spin lock.
+ * @param[in] lock       : pointer to shared-memory spin lock object
+ */
+void ub_spin_lock_init(ub_spin_lock_t *lock);
+
+/*
+ * @brief Acquire the spin lock.
+ * @param[in] lock       : pointer to shared-memory spin lock object
+ * @param[in] timeout_ms : lock timeout in milliseconds, 0 means default 10000ms
+ * @param[in] location   : caller location (node/thread)
+ * @return lock result status
+ */
+ub_lock_result_t ub_spin_lock(ub_spin_lock_t *lock, time_ms_t timeout_ms, const ub_location_t *location);
+
+/*
+ * @brief Release the spin lock.
+ * @param[in] lock       : pointer to shared-memory spin lock object
+ * @param[in] location   : caller location (node/thread)
+ * @return lock result status
+ */
+ub_lock_result_t ub_spin_unlock(ub_spin_lock_t *lock, const ub_location_t *location);
 #ifndef UB_ATOMIC_LOG_FUNC_TYPEDEF
 #define UB_ATOMIC_LOG_FUNC_TYPEDEF
 /*
