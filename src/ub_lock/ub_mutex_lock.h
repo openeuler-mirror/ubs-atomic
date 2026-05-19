@@ -36,6 +36,9 @@ private:
     ub_mutex_lock_t *lock_shm_;
 
     ub_lock_result_t acquire_global(const steady_time_point &deadline, const ub_location_t &location);
+    ub_lock_result_t check_recursive_global_owner(uint64_t identify) const;
+    ub_lock_result_t wait_global_handoff(const steady_time_point &deadline, const ub_location_t &location,
+                                         uint32_t &slot);
     bool is_ready() const;
     bool try_lock_fast(uint64_t identify, bool is_awakened, uint32_t slot);
     void create_wait_queue();

@@ -128,6 +128,20 @@ static inline ub_lock_result_t mutex_send_with_retry(const message_t *msg, uint3
     return UB_LOCK_ERROR;
 }
 
+static inline bool wait_mutex_ready(ub_mutex_lock_t *lock)
+{
+    for (uint32_t i = 0; i < MUTEX_INIT_WAIT_ROUNDS; ++i) {
+        if (lock->is_inited.load(std::memory_order_acquire) == MUTEX_READY) {
+            return true;
+        }
+        if ((i % MUTEX_YIELD_INTERVAL) == 0) {
+            std::this_thread::yield();
+        }
+        cpu_relax();
+    }
+    return lock->is_inited.load(std::memory_order_acquire) == MUTEX_READY;
+}
+
 static message_t *create_mutex_message(const ub_location_t &waiter_location, uint8_t src_node_id)
 {
     message_t *msg = new message_t();
@@ -154,10 +168,10 @@ static message_t *create_mutex_message(const ub_location_t &waiter_location, uin
 void MutexLock::create_wait_queue()
 {
     ring_queue_init<UB_MAX_NODES>(lock_shm_->queue_head, lock_shm_->queue_tail, lock_shm_->waiting_count,
-                                  lock_shm_->wait_queue, [](ub_waiter_t &slot) {
-                                      slot.mode = UB_LOCK_I;
-                                      slot.location = ub_location_t{.tid = 0, .node_id = 0xFF};
-                                  });
+                                lock_shm_->wait_queue, [](ub_waiter_t &slot) {
+                                    slot.mode = UB_LOCK_I;
+                                    slot.location = ub_location_t{.tid = 0, .node_id = 0xFF};
+                                });
 }
 
 ub_lock_result_t MutexLock::enqueue_waiter(const ub_location_t &location, uint32_t &out_ticket)
@@ -249,41 +263,23 @@ bool MutexLock::try_lock_fast(uint64_t identify, bool is_awakened, uint32_t slot
 
 void MutexLock::lock_create()
 {
-    while (true) {
-        int32_t state = lock_shm_->is_inited.load(std::memory_order_acquire);
-        if (state == MUTEX_READY) {
-            break;
+    int32_t state = lock_shm_->is_inited.load(std::memory_order_acquire);
+    if (state != MUTEX_READY) {
+        int32_t expected = state;
+        const bool can_init = state == MUTEX_INIT_EMPTY || state < MUTEX_INIT_EMPTY || state > MUTEX_READY;
+        if (can_init &&
+            lock_shm_->is_inited.compare_exchange_strong(expected, MUTEX_INITING, std::memory_order_acq_rel,
+                                                         std::memory_order_acquire)) {
+            std::memset(lock_shm_->_pad, 0, sizeof(lock_shm_->_pad));
+            lock_shm_->lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_relaxed);
+            create_wait_queue();
+            lock_shm_->is_inited.store(MUTEX_READY, std::memory_order_release);
+        } else if (expected != MUTEX_READY && !wait_mutex_ready(lock_shm_)) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "mutex lock create failed because init is not ready");
+            return;
         }
-
-        if (state == MUTEX_INIT_EMPTY ||
-            (state != MUTEX_INITING && state != MUTEX_READY)) {
-            int32_t expected = state;
-            if (lock_shm_->is_inited.compare_exchange_strong(expected, MUTEX_INITING, std::memory_order_acq_rel,
-                                                             std::memory_order_acquire)) {
-                std::memset(lock_shm_->_pad, 0, sizeof(lock_shm_->_pad));
-                lock_shm_->lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_relaxed);
-                create_wait_queue();
-                lock_shm_->is_inited.store(MUTEX_READY, std::memory_order_release);
-                break;
-            }
-            continue;
-        }
-
-        for (uint32_t i = 0; i < MUTEX_INIT_WAIT_ROUNDS; ++i) {
-            if (lock_shm_->is_inited.load(std::memory_order_acquire) == MUTEX_READY) {
-                goto ready;
-            }
-            if ((i % MUTEX_YIELD_INTERVAL) == 0) {
-                std::this_thread::yield();
-            }
-            cpu_relax();
-        }
-        int32_t expected = MUTEX_INITING;
-        (void)lock_shm_->is_inited.compare_exchange_strong(expected, MUTEX_INIT_EMPTY, std::memory_order_acq_rel,
-                                                           std::memory_order_acquire);
     }
 
-ready:
     if (!lookup_mutex_local_lock(lock_shm_)) {
         register_mutex_local_lock(lock_shm_, std::make_shared<MutexLocalLock>());
     }
@@ -306,12 +302,44 @@ bool MutexLock::is_ready() const
     return lock_shm_->is_inited.load(std::memory_order_acquire) == MUTEX_READY;
 }
 
+ub_lock_result_t MutexLock::check_recursive_global_owner(uint64_t identify) const
+{
+    if (lock_shm_->lock_owner.load(std::memory_order_acquire) == identify) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "recursive mutex lock is not supported");
+        return UB_LOCK_ERROR;
+    }
+    return UB_LOCK_SUCCESS;
+}
+
+ub_lock_result_t MutexLock::wait_global_handoff(const steady_time_point &deadline, const ub_location_t &location,
+                                                uint32_t &slot)
+{
+    local_wait_ctx_t ctx;
+    WaiterGuard guard(location.tid, &ctx);
+    ub_lock_result_t ret = enqueue_waiter(location, slot);
+    if (ret != UB_LOCK_SUCCESS) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "The mutex lock waiting queue is full");
+        return ret;
+    }
+
+    bool global_self_notify = false;
+    if (lock_shm_->lock_owner.load(std::memory_order_acquire) == LOCK_INVALID_OWNER) {
+        global_self_notify = ring_queue_try_self_handoff_if_head<UB_MAX_NODES>(
+            lock_shm_->queue_head, lock_shm_->queue_tail, lock_shm_->wait_queue, slot);
+    }
+
+    if (!global_self_notify && !ctx.wait(deadline)) {
+        clean_timeout_waiter(slot);
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "The mutex lock hold timeout");
+        return UB_LOCK_TIMEOUT;
+    }
+    return UB_LOCK_SUCCESS;
+}
+
 ub_lock_result_t MutexLock::acquire_global(const steady_time_point &deadline, const ub_location_t &location)
 {
     const uint64_t identify = make_global_owner(location.node_id, location.tid);
-    uint64_t owner = lock_shm_->lock_owner.load(std::memory_order_acquire);
-    if (owner == identify) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR, "recursive mutex lock is not supported");
+    if (check_recursive_global_owner(identify) != UB_LOCK_SUCCESS) {
         return UB_LOCK_ERROR;
     }
 
@@ -323,9 +351,7 @@ ub_lock_result_t MutexLock::acquire_global(const steady_time_point &deadline, co
             return UB_LOCK_SUCCESS;
         }
 
-        owner = lock_shm_->lock_owner.load(std::memory_order_acquire);
-        if (owner == identify) {
-            ATOMIC_LOG(LOG_LEVEL_ERROR, "recursive mutex lock is not supported");
+        if (check_recursive_global_owner(identify) != UB_LOCK_SUCCESS) {
             return UB_LOCK_ERROR;
         }
 
@@ -340,24 +366,9 @@ ub_lock_result_t MutexLock::acquire_global(const steady_time_point &deadline, co
             continue;
         }
         if ((++wait_round % MUTEX_YIELD_INTERVAL) == 0) {
-            local_wait_ctx_t ctx;
-            WaiterGuard guard(location.tid, &ctx);
-            ub_lock_result_t ret = enqueue_waiter(location, slot);
+            ub_lock_result_t ret = wait_global_handoff(deadline, location, slot);
             if (ret != UB_LOCK_SUCCESS) {
-                ATOMIC_LOG(LOG_LEVEL_ERROR, "The mutex lock waiting queue is full");
                 return ret;
-            }
-
-            bool global_self_notify = false;
-            if (lock_shm_->lock_owner.load(std::memory_order_acquire) == LOCK_INVALID_OWNER) {
-                global_self_notify = ring_queue_try_self_handoff_if_head<UB_MAX_NODES>(
-                    lock_shm_->queue_head, lock_shm_->queue_tail, lock_shm_->wait_queue, slot);
-            }
-
-            if (!global_self_notify && !ctx.wait(deadline)) {
-                clean_timeout_waiter(slot);
-                ATOMIC_LOG(LOG_LEVEL_ERROR, "The mutex lock hold timeout");
-                return UB_LOCK_TIMEOUT;
             }
             is_awakened = true;
             continue;
