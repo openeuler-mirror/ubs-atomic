@@ -13,6 +13,22 @@ bool is_valid_rebuild_mode(ub_lock_mode_t mode)
     return mode == UB_LOCK_I || mode == UB_LOCK_S || mode == UB_LOCK_SX || mode == UB_LOCK_X;
 }
 
+bool is_valid_query_result_entry(const ub_lock_query_result_t &entry)
+{
+    switch (entry.held_mode) {
+        case UB_LOCK_I:
+            return entry.holder_tid == 0 && entry.recursive_count == 0u && !entry.has_shared_ref;
+        case UB_LOCK_S:
+            return entry.holder_tid == 0 && entry.recursive_count == 0u && entry.has_shared_ref;
+        case UB_LOCK_X:
+            return entry.holder_tid != 0 && entry.recursive_count > 0u && !entry.has_shared_ref;
+        case UB_LOCK_SX:
+            return entry.holder_tid != 0 && entry.recursive_count > 0u;
+        default:
+            return false;
+    }
+}
+
 bool is_valid_delayed_release_rebuild_state(const ub_lock_query_result_t *reserve_entry,
                                             const ub_lock_query_result_t *x_holder,
                                             const ub_lock_query_result_t *sx_holder, uint32_t shared_count)
@@ -53,8 +69,10 @@ void replay_delayed_release_state(ub_rw_lock_t *lock, const ub_lock_query_result
             lock->sx_recursive.store(1u, std::memory_order_release);
             break;
         case UB_LOCK_S:
-            shared_bitmap |= (1u << reserve_entry->node_id);
-            ++shared_count;
+            if ((shared_bitmap & (1u << reserve_entry->node_id)) == 0u) {
+                shared_bitmap |= (1u << reserve_entry->node_id);
+                ++shared_count;
+            }
             if (sx_holder != nullptr) {
                 lock->lock_word.store(static_cast<int32_t>(X_LOCK_HALF_DECR - shared_count), std::memory_order_release);
             } else {
@@ -859,6 +877,7 @@ ub_lock_result_t DistributedLock::query_holder(const ub_location_t &location, ub
     result = {};
     result.node_id = location.node_id;
     result.held_mode = UB_LOCK_I;
+    result.has_shared_ref = false;
     result.reserve_mode = UB_LOCK_I;
 
     std::shared_ptr<LocalLock> ll_sp = lookup_local_lock(rw_lock_shm_);
@@ -867,6 +886,7 @@ ub_lock_result_t DistributedLock::query_holder(const ub_location_t &location, ub
     }
     LocalLock *local_lock = ll_sp.get();
     result.reserve_mode = local_lock->local_is_reserve_lock.load(std::memory_order_acquire);
+    result.has_shared_ref = local_lock->global_read_ref_count_.load(std::memory_order_acquire) > 0;
     const bool hold_global = local_lock->hold_global.load(std::memory_order_acquire);
     const int32_t x_owner = local_lock->lock_x_owner.load(std::memory_order_acquire);
     if (hold_global && x_owner != 0) {
@@ -890,7 +910,7 @@ ub_lock_result_t DistributedLock::query_holder(const ub_location_t &location, ub
         return UB_LOCK_SUCCESS;
     }
 
-    if (local_lock->global_read_ref_count_.load(std::memory_order_acquire) > 0) {
+    if (result.has_shared_ref) {
         result.held_mode = UB_LOCK_S;
     }
     return UB_LOCK_SUCCESS;
@@ -924,31 +944,31 @@ ub_lock_result_t DistributedLock::rebuild(ub_rw_lock_t *old_lock, const ub_lock_
     for (uint32_t i = 0; i < rebuild_info.query_result_count; ++i) {
         const ub_lock_query_result_t &entry = rebuild_info.query_results[i];
         if (entry.node_id >= UB_MAX_NODES || seen_nodes[entry.node_id] || !is_valid_rebuild_mode(entry.held_mode) ||
-            !is_valid_rebuild_mode(entry.reserve_mode)) {
+            !is_valid_rebuild_mode(entry.reserve_mode) || !is_valid_query_result_entry(entry)) {
             ATOMIC_LOG(LOG_LEVEL_ERROR, "invalid rebuild entry");
             return UB_LOCK_ERROR;
         }
         seen_nodes[entry.node_id] = true;
 
         if (entry.reserve_mode != UB_LOCK_I) {
-            if (entry.held_mode != UB_LOCK_I || reserve_entry != nullptr) {
+            const bool delayed_with_shared = (entry.held_mode == UB_LOCK_S && entry.has_shared_ref);
+            if ((entry.held_mode != UB_LOCK_I && !delayed_with_shared) || reserve_entry != nullptr) {
                 ATOMIC_LOG(LOG_LEVEL_ERROR, "conflicting delayed-release rebuild entry");
                 return UB_LOCK_ERROR;
             }
             reserve_entry = &entry;
         }
 
+        if (entry.has_shared_ref) {
+            shared_bitmap |= (1u << entry.node_id);
+            ++shared_count;
+        }
+
         if (entry.held_mode == UB_LOCK_I) {
             continue;
         }
         if (entry.held_mode == UB_LOCK_S) {
-            shared_bitmap |= (1u << entry.node_id);
-            ++shared_count;
             continue;
-        }
-        if (entry.holder_tid == 0 || entry.recursive_count == 0u) {
-            ATOMIC_LOG(LOG_LEVEL_ERROR, "invalid rebuild owner entry");
-            return UB_LOCK_ERROR;
         }
         if (entry.held_mode == UB_LOCK_X) {
             if (x_holder != nullptr || sx_holder != nullptr || shared_count > 0u) {

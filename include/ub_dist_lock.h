@@ -7,6 +7,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#ifndef __cplusplus
+#include <stdbool.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -60,12 +63,13 @@ typedef struct {
 } ub_lock_config_t;              /* Configuration fixed at lock creation time */
 
 typedef struct {
-    uint8_t node_id;          /* queried node id */
-    ub_lock_mode_t held_mode; /* recoverable holder mode on this node */
-    int32_t holder_tid;       /* valid for X/SX, otherwise 0 */
-    uint32_t recursive_count; /* valid for X/SX, otherwise 0 */
+    uint8_t node_id;             /* queried node id */
+    ub_lock_mode_t held_mode;    /* recoverable owner mode on this node */
+    int32_t holder_tid;          /* valid for X/SX, otherwise 0 */
+    uint32_t recursive_count;    /* valid for X/SX, otherwise 0 */
+    bool has_shared_ref;         /* whether this node also holds recoverable global S */
     ub_lock_mode_t reserve_mode; /* delayed-release mode on this node, otherwise UB_LOCK_I */
-} ub_lock_query_result_t;     /* Minimal local snapshot used for rebuild */
+} ub_lock_query_result_t;        /* Minimal local snapshot used for rebuild */
 
 typedef struct {
     const ub_lock_query_result_t *query_results; /* one result per queried node */
