@@ -510,7 +510,7 @@ dos2unix build.sh
 
 ### `sh build.sh test` 失败
 
-当前仓库里实际存在的是 `test/run_ut.sh`。如果你的分支仍然走到 `test/run_dt.sh`，请直接执行：
+当前仓库里实际存在的是 `test/run_ut.sh`。如果你的分支仍然走到 `test/run_ut.sh`，请直接执行：
 
 ```bash
 sh test/run_ut.sh

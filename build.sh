@@ -308,7 +308,7 @@ function build_cmake() {
         CURRENT_PATH=$(cd "$(dirname "$0")"; pwd)
         echo "${CURRENT_PATH:?}"
         cd "${CURRENT_PATH:?}"
-        sh ./test/run_dt.sh
+        sh ./test/run_ut.sh
         exit 0
     fi
 
