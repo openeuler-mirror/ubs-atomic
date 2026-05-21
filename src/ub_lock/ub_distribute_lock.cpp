@@ -4,7 +4,7 @@
 
 #include "inner_distribute_lock.h"
 
-#include <cstdio>
+#include <string>
 
 namespace ublock {
 
@@ -46,48 +46,80 @@ bool has_valid_owner(uint64_t owner)
     return owner != LOCK_INVALID_OWNER;
 }
 
-void format_owner(uint64_t owner, char *buf, size_t buf_size)
+struct TimeoutGlobalSnapshot {
+    int32_t lock_word{0};
+    uint64_t owner_x{LOCK_INVALID_OWNER};
+    uint64_t owner_sx{LOCK_INVALID_OWNER};
+    uint64_t reserve_owner{LOCK_INVALID_OWNER};
+    uint32_t shared_bitmap{0};
+    uint32_t waiting_count{0};
+};
+
+struct TimeoutLocalSnapshot {
+    int32_t lock_word{0};
+    uint32_t read_count{0};
+    uint32_t waiting_count{0};
+    int32_t owner_x{0};
+    int32_t owner_sx{0};
+    ub_lock_mode_t reserve_mode{UB_LOCK_I};
+};
+
+struct TimeoutGlobalLogInfo {
+    TimeoutGlobalSnapshot snapshot;
+    std::string owner_x_desc;
+    std::string owner_sx_desc;
+    std::string reserve_owner_desc;
+    std::string blocker_desc;
+};
+
+struct TimeoutLocalLogInfo {
+    TimeoutLocalSnapshot snapshot;
+    std::string blocker_desc;
+};
+
+struct TimeoutLogContext {
+    const ub_location_t *location{nullptr};
+    ub_lock_mode_t request_mode{UB_LOCK_I};
+    const char *wait_scope{nullptr};
+    std::string blocker;
+    ub_rw_lock_t *lock{nullptr};
+};
+
+std::string format_owner(uint64_t owner)
 {
     if (!has_valid_owner(owner)) {
-        std::snprintf(buf, buf_size, "none");
-        return;
+        return "none";
     }
-    std::snprintf(buf, buf_size, "node=%u,tid=%d", owner_node(owner), owner_tid(owner));
+    return "node=" + std::to_string(owner_node(owner)) + ",tid=" + std::to_string(owner_tid(owner));
 }
 
-void format_blocker(ub_lock_mode_t request_mode, int32_t lock_word, uint64_t owner_x, uint64_t owner_sx,
-                    uint64_t reserve_owner, uint32_t shared_bitmap, uint32_t waiting_count, char *buf,
-                    size_t buf_size)
+std::string format_global_blocker(ub_lock_mode_t request_mode, const TimeoutGlobalSnapshot &snapshot)
 {
-    if (has_valid_owner(owner_x)) {
-        std::snprintf(buf, buf_size, "X(node=%u,tid=%d)", owner_node(owner_x), owner_tid(owner_x));
-        return;
+    if (has_valid_owner(snapshot.owner_x)) {
+        return "X(node=" + std::to_string(owner_node(snapshot.owner_x)) +
+               ",tid=" + std::to_string(owner_tid(snapshot.owner_x)) + ")";
     }
-    if ((request_mode == UB_LOCK_X || request_mode == UB_LOCK_SX) && has_valid_owner(owner_sx)) {
-        std::snprintf(buf, buf_size, "SX(node=%u,tid=%d)", owner_node(owner_sx), owner_tid(owner_sx));
-        return;
+    if ((request_mode == UB_LOCK_X || request_mode == UB_LOCK_SX) && has_valid_owner(snapshot.owner_sx)) {
+        return "SX(node=" + std::to_string(owner_node(snapshot.owner_sx)) +
+               ",tid=" + std::to_string(owner_tid(snapshot.owner_sx)) + ")";
     }
-    if (request_mode == UB_LOCK_X && shared_bitmap != 0u) {
-        std::snprintf(buf, buf_size, "S");
-        return;
+    if (request_mode == UB_LOCK_X && snapshot.shared_bitmap != 0u) {
+        return "S";
     }
-    if (request_mode == UB_LOCK_SX && lock_word <= X_LOCK_HALF_DECR && shared_bitmap != 0u) {
-        std::snprintf(buf, buf_size, "S");
-        return;
+    if (request_mode == UB_LOCK_SX && snapshot.lock_word <= X_LOCK_HALF_DECR && snapshot.shared_bitmap != 0u) {
+        return "S";
     }
-    if (has_valid_owner(reserve_owner)) {
-        std::snprintf(buf, buf_size, "DELAYED(node=%u,tid=%d)", owner_node(reserve_owner), owner_tid(reserve_owner));
-        return;
+    if (has_valid_owner(snapshot.reserve_owner)) {
+        return "DELAYED(node=" + std::to_string(owner_node(snapshot.reserve_owner)) +
+               ",tid=" + std::to_string(owner_tid(snapshot.reserve_owner)) + ")";
     }
-    if (shared_bitmap != 0u) {
-        std::snprintf(buf, buf_size, "S");
-        return;
+    if (snapshot.shared_bitmap != 0u) {
+        return "S";
     }
-    if (waiting_count > 0u) {
-        std::snprintf(buf, buf_size, "WAITERS(count=%u)", waiting_count);
-        return;
+    if (snapshot.waiting_count > 0u) {
+        return "WAITERS(count=" + std::to_string(snapshot.waiting_count) + ")";
     }
-    std::snprintf(buf, buf_size, "UNKNOWN");
+    return "UNKNOWN";
 }
 
 bool timeout_is_local_wait(const char *reason)
@@ -111,30 +143,114 @@ const char *timeout_wait_scope_name(const char *reason)
     return "global";
 }
 
-void format_local_blocker(ub_lock_mode_t request_mode, int32_t request_tid, int32_t lock_word, uint32_t read_count,
-                          uint32_t waiting_count, int32_t owner_x, int32_t owner_sx, char *buf, size_t buf_size)
+std::string format_local_blocker(ub_lock_mode_t request_mode, int32_t request_tid,
+                                 const TimeoutLocalSnapshot &snapshot)
 {
-    if (owner_x != 0) {
-        std::snprintf(buf, buf_size, "X(tid=%d,%s)", owner_x, owner_x == request_tid ? "self" : "other");
-        return;
+    if (snapshot.owner_x != 0) {
+        return "X(tid=" + std::to_string(snapshot.owner_x) +
+               "," + (snapshot.owner_x == request_tid ? "self" : "other") + ")";
     }
-    if ((request_mode == UB_LOCK_X || request_mode == UB_LOCK_SX) && owner_sx != 0) {
-        std::snprintf(buf, buf_size, "SX(tid=%d,%s)", owner_sx, owner_sx == request_tid ? "self" : "other");
-        return;
+    if ((request_mode == UB_LOCK_X || request_mode == UB_LOCK_SX) && snapshot.owner_sx != 0) {
+        return "SX(tid=" + std::to_string(snapshot.owner_sx) +
+               "," + (snapshot.owner_sx == request_tid ? "self" : "other") + ")";
     }
-    if (request_mode == UB_LOCK_X && read_count != 0u) {
-        std::snprintf(buf, buf_size, "S(read_count=%u)", read_count);
-        return;
+    if (request_mode == UB_LOCK_X && snapshot.read_count != 0u) {
+        return "S(read_count=" + std::to_string(snapshot.read_count) + ")";
     }
-    if (request_mode == UB_LOCK_SX && lock_word <= X_LOCK_HALF_DECR && read_count != 0u) {
-        std::snprintf(buf, buf_size, "S(read_count=%u)", read_count);
-        return;
+    if (request_mode == UB_LOCK_SX && snapshot.lock_word <= X_LOCK_HALF_DECR && snapshot.read_count != 0u) {
+        return "S(read_count=" + std::to_string(snapshot.read_count) + ")";
     }
-    if (waiting_count != 0u) {
-        std::snprintf(buf, buf_size, "WAITERS(count=%u)", waiting_count);
-        return;
+    if (snapshot.waiting_count != 0u) {
+        return "WAITERS(count=" + std::to_string(snapshot.waiting_count) + ")";
     }
-    std::snprintf(buf, buf_size, "UNKNOWN");
+    return "UNKNOWN";
+}
+
+TimeoutGlobalSnapshot collect_global_timeout_snapshot(ub_rw_lock_t *lock)
+{
+    TimeoutGlobalSnapshot snapshot{};
+    snapshot.lock_word = lock->lock_word.load(std::memory_order_acquire);
+    snapshot.owner_x = lock->lock_owner_x.load(std::memory_order_acquire);
+    snapshot.owner_sx = lock->lock_owner_sx.load(std::memory_order_acquire);
+    snapshot.reserve_owner = lock->reserve_lock_owner.load(std::memory_order_acquire);
+    snapshot.shared_bitmap = lock->shared_owner_bitmap.load(std::memory_order_acquire);
+    snapshot.waiting_count = lock->waiting_count.load(std::memory_order_acquire);
+    return snapshot;
+}
+
+TimeoutLocalSnapshot collect_local_timeout_snapshot(LocalLock *local_lock)
+{
+    TimeoutLocalSnapshot snapshot{};
+    snapshot.lock_word = local_lock->lock_word.v.load(std::memory_order_acquire);
+    snapshot.read_count = local_lock->read_count.load(std::memory_order_acquire);
+    snapshot.waiting_count = local_lock->waiting_count.load(std::memory_order_acquire);
+    snapshot.owner_x = local_lock->lock_x_owner.load(std::memory_order_acquire);
+    snapshot.owner_sx = local_lock->lock_sx_owner.load(std::memory_order_acquire);
+    snapshot.reserve_mode = local_lock->local_is_reserve_lock.load(std::memory_order_acquire);
+    return snapshot;
+}
+
+TimeoutGlobalLogInfo make_global_timeout_log_info(ub_lock_mode_t request_mode, ub_rw_lock_t *lock)
+{
+    TimeoutGlobalLogInfo info{};
+    info.snapshot = collect_global_timeout_snapshot(lock);
+    info.owner_x_desc = format_owner(info.snapshot.owner_x);
+    info.owner_sx_desc = format_owner(info.snapshot.owner_sx);
+    info.reserve_owner_desc = format_owner(info.snapshot.reserve_owner);
+    info.blocker_desc = format_global_blocker(request_mode, info.snapshot);
+    return info;
+}
+
+TimeoutLocalLogInfo make_local_timeout_log_info(ub_lock_mode_t request_mode, int32_t request_tid,
+                                                LocalLock *local_lock)
+{
+    TimeoutLocalLogInfo info{};
+    info.snapshot = collect_local_timeout_snapshot(local_lock);
+    info.blocker_desc = format_local_blocker(request_mode, request_tid, info.snapshot);
+    return info;
+}
+
+std::string select_timeout_blocker(const char *reason, const TimeoutGlobalLogInfo &global_info,
+                                   const TimeoutLocalLogInfo &local_info)
+{
+    if (timeout_is_local_wait(reason)) {
+        return local_info.blocker_desc;
+    }
+    if (timeout_is_same_node_wait(reason)) {
+        return "same_node_s_leader";
+    }
+    return global_info.blocker_desc;
+}
+
+void log_timeout_null_lock(const TimeoutLogContext &ctx)
+{
+    ATOMIC_LOG(LOG_LEVEL_ERROR, "UB lock timeout: wait=%s request=%s node=%u tid=%d lock=null", ctx.wait_scope,
+               lock_mode_name(ctx.request_mode), static_cast<unsigned>(ctx.location->node_id), ctx.location->tid);
+}
+
+void log_timeout_without_local(const TimeoutLogContext &ctx, const TimeoutGlobalLogInfo &global_info)
+{
+    ATOMIC_LOG(LOG_LEVEL_ERROR,
+               "UB lock timeout: wait=%s request=%s node=%u tid=%d lock=%p blocker=%s global[x=%s sx=%s "
+               "reserve=%s waiters=%u] local=null",
+               ctx.wait_scope, lock_mode_name(ctx.request_mode), static_cast<unsigned>(ctx.location->node_id),
+               ctx.location->tid, static_cast<void *>(ctx.lock), global_info.blocker_desc.c_str(),
+               global_info.owner_x_desc.c_str(), global_info.owner_sx_desc.c_str(),
+               global_info.reserve_owner_desc.c_str(), global_info.snapshot.waiting_count);
+}
+
+void log_timeout_with_local(const TimeoutLogContext &ctx, const TimeoutGlobalLogInfo &global_info,
+                            const TimeoutLocalLogInfo &local_info)
+{
+    ATOMIC_LOG(LOG_LEVEL_ERROR,
+               "UB lock timeout: wait=%s request=%s node=%u tid=%d lock=%p blocker=%s global[x=%s sx=%s reserve=%s "
+               "waiters=%u] local[x=%d sx=%d readers=%u waiters=%u reserve=%s]",
+               ctx.wait_scope, lock_mode_name(ctx.request_mode), static_cast<unsigned>(ctx.location->node_id),
+               ctx.location->tid, static_cast<void *>(ctx.lock), ctx.blocker.c_str(), global_info.owner_x_desc.c_str(),
+               global_info.owner_sx_desc.c_str(), global_info.reserve_owner_desc.c_str(),
+               global_info.snapshot.waiting_count, local_info.snapshot.owner_x, local_info.snapshot.owner_sx,
+               local_info.snapshot.read_count, local_info.snapshot.waiting_count,
+               lock_mode_name(local_info.snapshot.reserve_mode));
 }
 
 bool is_valid_query_result_entry(const ub_lock_query_result_t &entry)
@@ -496,61 +612,21 @@ inline bool try_claim_delayed_owner(std::atomic<uint64_t> &owner_slot, uint64_t 
 void DistributedLock::dump_timeout_holder_info(const ub_location_t &location, ub_lock_mode_t request_mode,
                                                LocalLock *local_lock, const char *reason)
 {
-    const char *wait_scope = timeout_wait_scope_name(reason);
+    TimeoutLogContext ctx{&location, request_mode, timeout_wait_scope_name(reason), "", rw_lock_shm_};
     if (rw_lock_shm_ == nullptr) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR, "UB lock timeout: wait=%s request=%s node=%u tid=%d lock=null", wait_scope,
-                   lock_mode_name(request_mode), static_cast<unsigned>(location.node_id), location.tid);
+        log_timeout_null_lock(ctx);
         return;
     }
 
-    const int32_t lock_word = rw_lock_shm_->lock_word.load(std::memory_order_acquire);
-    const uint64_t owner_x = rw_lock_shm_->lock_owner_x.load(std::memory_order_acquire);
-    const uint64_t owner_sx = rw_lock_shm_->lock_owner_sx.load(std::memory_order_acquire);
-    const uint64_t reserve_owner = rw_lock_shm_->reserve_lock_owner.load(std::memory_order_acquire);
-    const uint32_t shared_bitmap = rw_lock_shm_->shared_owner_bitmap.load(std::memory_order_acquire);
-    const uint32_t waiting_count = rw_lock_shm_->waiting_count.load(std::memory_order_acquire);
-    char owner_x_desc[32];
-    char owner_sx_desc[32];
-    char reserve_owner_desc[32];
-    char global_blocker_desc[40];
-    format_owner(owner_x, owner_x_desc, sizeof(owner_x_desc));
-    format_owner(owner_sx, owner_sx_desc, sizeof(owner_sx_desc));
-    format_owner(reserve_owner, reserve_owner_desc, sizeof(reserve_owner_desc));
-    format_blocker(request_mode, lock_word, owner_x, owner_sx, reserve_owner, shared_bitmap, waiting_count,
-                   global_blocker_desc, sizeof(global_blocker_desc));
-
+    TimeoutGlobalLogInfo global_info = make_global_timeout_log_info(request_mode, rw_lock_shm_);
     if (local_lock == nullptr) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR,
-                   "UB lock timeout: wait=%s request=%s node=%u tid=%d lock=%p blocker=%s global[x=%s sx=%s "
-                   "reserve=%s waiters=%u] local=null",
-                   wait_scope, lock_mode_name(request_mode), static_cast<unsigned>(location.node_id), location.tid,
-                   static_cast<void *>(rw_lock_shm_), global_blocker_desc, owner_x_desc, owner_sx_desc,
-                   reserve_owner_desc, waiting_count);
+        log_timeout_without_local(ctx, global_info);
         return;
     }
 
-    const int32_t local_lock_word = local_lock->lock_word.v.load(std::memory_order_acquire);
-    const uint32_t local_read_count = local_lock->read_count.load(std::memory_order_acquire);
-    const uint32_t local_waiting_count = local_lock->waiting_count.load(std::memory_order_acquire);
-    const int32_t local_owner_x = local_lock->lock_x_owner.load(std::memory_order_acquire);
-    const int32_t local_owner_sx = local_lock->lock_sx_owner.load(std::memory_order_acquire);
-    char local_blocker_desc[40];
-    format_local_blocker(request_mode, location.tid, local_lock_word, local_read_count, local_waiting_count,
-                         local_owner_x, local_owner_sx, local_blocker_desc, sizeof(local_blocker_desc));
-    const char *blocker_desc = global_blocker_desc;
-    if (timeout_is_local_wait(reason)) {
-        blocker_desc = local_blocker_desc;
-    } else if (timeout_is_same_node_wait(reason)) {
-        blocker_desc = "same_node_s_leader";
-    }
-
-    ATOMIC_LOG(LOG_LEVEL_ERROR,
-               "UB lock timeout: wait=%s request=%s node=%u tid=%d lock=%p blocker=%s global[x=%s sx=%s reserve=%s "
-               "waiters=%u] local[x=%d sx=%d readers=%u waiters=%u reserve=%s]",
-               wait_scope, lock_mode_name(request_mode), static_cast<unsigned>(location.node_id), location.tid,
-               static_cast<void *>(rw_lock_shm_), blocker_desc, owner_x_desc, owner_sx_desc, reserve_owner_desc,
-               waiting_count, local_owner_x, local_owner_sx, local_read_count, local_waiting_count,
-               lock_mode_name(local_lock->local_is_reserve_lock.load(std::memory_order_acquire)));
+    TimeoutLocalLogInfo local_info = make_local_timeout_log_info(request_mode, location.tid, local_lock);
+    ctx.blocker = select_timeout_blocker(reason, global_info, local_info);
+    log_timeout_with_local(ctx, global_info, local_info);
 }
 
 // 【关键修复】：取消自定义谓词，恢复最原汁原味的条件变量挂起机制，彻底解决 Busy Loop
