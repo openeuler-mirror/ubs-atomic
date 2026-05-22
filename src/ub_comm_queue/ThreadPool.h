@@ -1,6 +1,11 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ */
+
 #ifndef THREAD_POOL_H
 #define THREAD_POOL_H
 
+#include <atomic>
 #include <condition_variable>
 #include <functional>
 #include <future>
@@ -9,82 +14,122 @@
 #include <queue>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
+#include <type_traits>
 #include <vector>
+
+namespace ub_comm_queue {
 
 class ThreadPool {
 public:
-    ThreadPool(size_t);
+    explicit ThreadPool(size_t threadCount);
     template <class F, class... Args>
-    auto enqueue(F &&f, Args &&...args) -> std::future<typename std::result_of<F(Args...)>::type>;
+    auto enqueue(F &&f, Args &&...args) -> std::future<std::invoke_result_t<F, Args...>>;
+
     ~ThreadPool();
 
 private:
-    // need to keep track of threads so we can join them
-    std::vector<std::thread> workers;
-    // the task queue
-    std::queue<std::function<void()>> tasks;
+    void runWorkerLoop();
+    bool waitForTask(std::unique_lock<std::mutex>& lock);
+    bool tryDequeueTask(std::function<void()>& task);
+    void executeDrainPhase();
 
-    // synchronization
-    std::mutex queue_mutex;
-    std::condition_variable condition;
-    bool stop;
+    std::vector<std::thread> threads_;
+    std::queue<std::function<void()>> taskQueue_;
+    std::mutex mtx_;
+    std::condition_variable taskAvailable_;
+    std::atomic<bool> shuttingDown_;
 };
 
-// the constructor just launches some amount of workers
-inline ThreadPool::ThreadPool(size_t threads) : stop(false)
+inline ThreadPool::ThreadPool(size_t threadCount)
+    : shuttingDown_(false)
 {
-    for (size_t i = 0; i < threads; ++i)
-        workers.emplace_back([this] {
-            for (;;) {
-                std::function<void()> task;
-
-                {
-                    std::unique_lock<std::mutex> lock(this->queue_mutex);
-                    this->condition.wait(lock, [this] { return this->stop || !this->tasks.empty(); });
-                    if (this->stop && this->tasks.empty())
-                        return;
-                    task = std::move(this->tasks.front());
-                    this->tasks.pop();
-                }
-
-                task();
-            }
-        });
-}
-
-// add new work item to the pool
-template <class F, class... Args>
-auto ThreadPool::enqueue(F &&f, Args &&...args) -> std::future<typename std::result_of<F(Args...)>::type>
-{
-    using return_type = typename std::result_of<F(Args...)>::type;
-
-    auto task =
-        std::make_shared<std::packaged_task<return_type()>>(std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-
-    std::future<return_type> res = task->get_future();
-    {
-        std::unique_lock<std::mutex> lock(queue_mutex);
-
-        // don't allow enqueueing after stopping the pool
-        if (stop)
-            throw std::runtime_error("enqueue on stopped ThreadPool");
-
-        tasks.emplace([task]() { (*task)(); });
+    for (size_t i = 0; i < threadCount; ++i) {
+        threads_.emplace_back(&ThreadPool::runWorkerLoop, this);
     }
-    condition.notify_one();
-    return res;
 }
 
-// the destructor joins all threads
+inline bool ThreadPool::waitForTask(std::unique_lock<std::mutex>& lock)
+{
+    taskAvailable_.wait(lock,
+        [this] { return shuttingDown_.load(std::memory_order_acquire) || !taskQueue_.empty(); });
+    return !taskQueue_.empty();
+}
+
+inline bool ThreadPool::tryDequeueTask(std::function<void()>& task)
+{
+    std::unique_lock<std::mutex> lock(mtx_);
+    if (taskQueue_.empty() && !waitForTask(lock)) return false;
+    task = std::move(taskQueue_.front());
+    taskQueue_.pop();
+    return true;
+}
+
+inline void ThreadPool::executeDrainPhase()
+{
+    std::unique_lock<std::mutex> lock(mtx_);
+    while (!taskQueue_.empty()) {
+        auto task = std::move(taskQueue_.front());
+        taskQueue_.pop();
+        lock.unlock();
+        task();
+        lock.lock();
+    }
+}
+
+inline void ThreadPool::runWorkerLoop()
+{
+    // Phase 1: Normal operation — process tasks until shutdown signal
+    while (!shuttingDown_.load(std::memory_order_acquire)) {
+        std::function<void()> task;
+        if (!tryDequeueTask(task)) break;
+        task();
+    }
+
+    // Phase 2: Drain — execute any tasks still queued after shutdown signal
+    executeDrainPhase();
+}
+
+template <class F, class... Args>
+auto ThreadPool::enqueue(F &&f, Args &&...args)
+    -> std::future<std::invoke_result_t<F, Args...>>
+{
+    using return_type = std::invoke_result_t<F, Args...>;
+    using task_type = std::packaged_task<return_type()>;
+
+    auto task = std::make_shared<task_type>(
+        [captured_f = std::forward<F>(f),
+         captured_args = std::make_tuple(std::forward<Args>(args)...)]() mutable -> return_type {
+            return std::apply(std::move(captured_f), std::move(captured_args));
+        });
+
+    std::future<return_type> result = task->get_future();
+    {
+        std::unique_lock<std::mutex> lock(mtx_);
+        if (shuttingDown_.load(std::memory_order_acquire)) {
+            throw std::runtime_error("pool is shutting down");
+        }
+        if (threads_.empty()) {
+            throw std::runtime_error("no worker threads available");
+        }
+        taskQueue_.emplace([task]() { (*task)(); });
+    }
+    taskAvailable_.notify_one();
+    return result;
+}
+
 inline ThreadPool::~ThreadPool()
 {
-    {
-        std::unique_lock<std::mutex> lock(queue_mutex);
-        stop = true;
+    // Signal shutdown via atomic flag (no mutex needed for atomic store)
+    shuttingDown_.store(true, std::memory_order_release);
+    // Wake all blocked workers so they re-check the shutdown flag
+    taskAvailable_.notify_all();
+    // Wait for all workers to finish drain and exit
+    for (std::thread &t : threads_) {
+        t.join();
     }
-    condition.notify_all();
-    for (std::thread &worker : workers)
-        worker.join();
 }
 
-#endif
+} // namespace ub_comm_queue
+
+#endif // THREAD_POOL_H
