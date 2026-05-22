@@ -33,7 +33,7 @@ const char *lock_mode_name(ub_lock_mode_t mode)
 
 uint32_t owner_node(uint64_t owner)
 {
-    return owner == LOCK_INVALID_OWNER ? static_cast<uint32_t>(UB_MAX_NODES) : static_cast<uint32_t>(owner >> 32);
+    return owner == LOCK_INVALID_OWNER ? static_cast<uint32_t>(UB_MAX_NODES) : static_cast<uint32_t>(owner >> UB_LOCK_OWNER_NODE_SHIFT);
 }
 
 int32_t owner_tid(uint64_t owner)
@@ -629,9 +629,9 @@ void DistributedLock::dump_timeout_holder_info(const ub_location_t &location, ub
     log_timeout_with_local(ctx, global_info, local_info);
 }
 
-// 【关键修复】：取消自定义谓词，恢复最原汁原味的条件变量挂起机制，彻底解决 Busy Loop
 bool DistributedLock::wait_follower_s(const ub_location_t &location, LocalLock *local_lock,
-                                      const steady_time_point &deadline) {
+                                      const steady_time_point &deadline)
+{
     std::unique_lock<std::mutex> lk(local_lock->global_pending_mtx_);
     if (local_lock->global_pending_cv_.wait_until(lk, deadline) == std::cv_status::timeout) {
         if (std::chrono::steady_clock::now() >= deadline) {

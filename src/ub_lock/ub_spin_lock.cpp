@@ -26,7 +26,7 @@ inline bool is_invalid_node(uint8_t node_id)
 
 uint32_t spin_owner_node(uint64_t owner)
 {
-    return owner == LOCK_INVALID_OWNER ? static_cast<uint32_t>(UB_MAX_NODES) : static_cast<uint32_t>(owner >> 32);
+    return owner == LOCK_INVALID_OWNER ? static_cast<uint32_t>(UB_MAX_NODES) : static_cast<uint32_t>(owner >> UB_LOCK_OWNER_NODE_SHIFT);
 }
 
 int32_t spin_owner_tid(uint64_t owner)
