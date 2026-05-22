@@ -1,7 +1,9 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -49,6 +51,20 @@ message_header_t MakeHeader(uint32_t bodyLen)
     hdr.msg_type = 7;
     hdr.priority = 1;
     return hdr;
+}
+
+void WriteReadyEntry(MPSCRingBuffer *ring, uint64_t seq, const message_header_t &hdr, const void *body,
+                     uint32_t bodyLen)
+{
+    uintptr_t base = reinterpret_cast<uintptr_t>(ring) + MPSCRingBuffer::GetDataOffset();
+    uintptr_t entry = base + ((seq & ring->index_mask_) * ring->entry_stride_);
+    auto *ready = reinterpret_cast<std::atomic<uint64_t> *>(entry);
+    auto *data = reinterpret_cast<char *>(entry + sizeof(std::atomic<uint64_t>));
+    std::memcpy(data, &hdr, sizeof(hdr));
+    if (bodyLen > 0) {
+        std::memcpy(data + sizeof(hdr), body, bodyLen);
+    }
+    ready->store(seq + 1, std::memory_order_release);
 }
 
 } // namespace
@@ -297,6 +313,56 @@ TEST(MPSCRingBufferTest, TriggerForceFullMakesNextProducerFail)
 
     ring->trigger_force_full();
     EXPECT_EQ(ring->head_.load(std::memory_order_acquire), 0ULL - capacity);
+}
+
+TEST(MPSCRingBufferTest, HalfWrittenHeadSlotIsSkippedAfterLocalTimeout)
+{
+    constexpr uint32_t capacity = 4;
+    constexpr uint32_t maxMsgSize = 128;
+    auto mem = AllocRingMemory(capacity, maxMsgSize);
+    ASSERT_NE(mem, nullptr);
+    auto *ring = ConstructRing(mem.get(), capacity, maxMsgSize);
+
+    ring->tail_.store(1, std::memory_order_relaxed); // slot 0 reserved but never committed
+
+    const char body[] = "after-half-write";
+    message_header_t hdr = MakeHeader(sizeof(body));
+    WriteReadyEntry(ring, 1, hdr, body, sizeof(body));
+    ring->tail_.store(2, std::memory_order_release);
+
+    std::vector<char> out(maxMsgSize);
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), 0u);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), 0u);
+    EXPECT_EQ(ring->head_.load(std::memory_order_acquire), 1u);
+
+    ASSERT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t) + sizeof(body));
+    auto *outHdr = reinterpret_cast<message_header_t *>(out.data());
+    EXPECT_EQ(outHdr->msg_type, hdr.msg_type);
+    EXPECT_EQ(std::memcmp(out.data() + sizeof(message_header_t), body, sizeof(body)), 0);
+}
+
+TEST(MPSCRingBufferTest, HalfWriteRecoveryDoesNotSkipWhenReservedSlotBecomesReady)
+{
+    constexpr uint32_t capacity = 4;
+    constexpr uint32_t maxMsgSize = 128;
+    auto mem = AllocRingMemory(capacity, maxMsgSize);
+    ASSERT_NE(mem, nullptr);
+    auto *ring = ConstructRing(mem.get(), capacity, maxMsgSize);
+
+    ring->tail_.store(1, std::memory_order_release);
+
+    std::vector<char> out(maxMsgSize);
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), 0u);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+    const char body[] = "late-ready";
+    message_header_t hdr = MakeHeader(sizeof(body));
+    WriteReadyEntry(ring, 0, hdr, body, sizeof(body));
+
+    ASSERT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t) + sizeof(body));
+    EXPECT_EQ(ring->head_.load(std::memory_order_acquire), 1u);
+    EXPECT_EQ(std::memcmp(out.data() + sizeof(message_header_t), body, sizeof(body)), 0);
 }
 
 TEST(MPSCRingBufferTest, InvalidCapacityAborts)

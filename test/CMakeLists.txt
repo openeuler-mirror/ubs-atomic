@@ -71,6 +71,7 @@ target_include_directories(ubs_atomic_ut BEFORE PUBLIC
 
 # 传到源码、测试代码、打桩代码中的宏
 target_compile_definitions(ubs_atomic_ut PUBLIC DT_CONFIG
+    UB_COMM_QUEUE_TEST
 )
 
 target_link_libraries(ubs_atomic_ut
