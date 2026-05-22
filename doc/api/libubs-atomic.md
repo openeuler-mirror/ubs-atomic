@@ -197,16 +197,6 @@ void setup_log(void)
 | `check_interval_ms` | `uint32_t` | 本节点生产者心跳监控线程轮询周期，单位毫秒 | 必须大于 0 |
 | `timeout_ms` | `uint32_t` | 本节点观察 peer 的最小超时阈值，单位毫秒 | 必须大于 0，且不小于 `2 * check_interval_ms` |
 
-#### `ub_comm_queue_heartbeat_status_t`
-
-| 字段 | 类型 | 说明 | 参数有效性规格 |
-| --- | --- | --- | --- |
-| `timeout_ms` | `uint32_t` | 本节点对被查询节点使用的实际心跳超时阈值，单位毫秒 | 输出字段 |
-| `last_observed_seq` | `uint64_t` | 本节点最近观察到的目标节点心跳序号 | 输出字段 |
-| `last_change_age_ms` | `uint64_t` | 从本节点最后一次观察到序号变化到现在的本地单调时间差，单位毫秒 | 输出字段；`UINT64_MAX` 表示尚未观察到有效心跳 |
-| `node_id` | `uint8_t` | 被查询节点 ID | 输出字段 |
-| `alive` | `uint8_t` | 本节点对目标节点消费者是否存活的本地判断 | 输出字段；`1` 表示存活，`0` 表示超时或未知 |
-
 ### 2.3 `ub_comm_queue_init`
 
 | 项目 | 内容 |
@@ -364,36 +354,7 @@ ub_comm_queue_heartbeat_config_t eff = {0};
 int ret = ub_comm_queue_config_heartbeat(&handle, &req, &eff);
 ```
 
-### 2.9 `ub_comm_queue_get_heartbeat_status`
-
-| 项目 | 内容 |
-| --- | --- |
-| 名称 | `ub_comm_queue_get_heartbeat_status` |
-| 接口描述 | 查询本节点对指定节点消费者心跳的本地观察状态。 |
-| 接口类型 | 函数 |
-| 函数原型 | `int ub_comm_queue_get_heartbeat_status(ub_shm_comm_t *handle, uint8_t node_id, ub_comm_queue_heartbeat_status_t *status);` |
-| 返回参数 | 成功返回 `0`；失败返回负数错误码。 |
-
-| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
-| --- | --- | --- | --- |
-| `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
-| `node_id` | `uint8_t` | 待查询节点 ID | 必须存在于当前节点映射表 |
-| `status` | `ub_comm_queue_heartbeat_status_t *` | 输出心跳观察状态 | 非空 |
-
-**约束与注意事项**
-
-- 该接口只读本节点本地观察状态，不直接读取远端共享内存。
-- `last_change_age_ms` 基于本节点本地单调时钟计算，不依赖跨节点时钟同步。
-- `timeout_ms` 返回本节点对 `node_id` 使用的实际超时窗口；若 peer 声明了更大的心跳刷新周期，该值会大于本节点配置的最小超时窗口。
-
-**使用样例**
-
-```c
-ub_comm_queue_heartbeat_status_t st = {0};
-int ret = ub_comm_queue_get_heartbeat_status(&handle, 1, &st);
-```
-
-### 2.10 `ub_comm_queue_check_ready`
+### 2.9 `ub_comm_queue_check_ready`
 
 | 项目 | 内容 |
 | --- | --- |
@@ -412,27 +373,12 @@ int ret = ub_comm_queue_get_heartbeat_status(&handle, 1, &st);
 
 - 当前不建议业务依赖该接口完成收包；请优先使用 `ub_comm_queue_register_process_func` 注册回调。
 
-### 2.11 `ub_comm_queue_recv`
-
-| 项目 | 内容 |
-| --- | --- |
-| 名称 | `ub_comm_queue_recv` |
-| 接口描述 | 主动接收消息接口。当前主要收包路径为后台分发线程和回调派发。 |
-| 接口类型 | 函数 |
-| 函数原型 | `int ub_comm_queue_recv(ub_shm_comm_t *handle, void *buffer, uint32_t length);` |
-| 返回参数 | 当前实现返回 `0`。 |
-
-| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
-| --- | --- | --- | --- |
-| `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
-| `buffer` | `void *` | 接收缓冲区 | 当前实现未使用 |
-| `length` | `uint32_t` | 接收缓冲区长度 | 当前实现未使用 |
 
 **约束与注意事项**
 
 - 当前不建议业务依赖该接口完成收包；请优先使用 `ub_comm_queue_register_process_func` 注册回调。
 
-### 2.12 `ub_comm_queue_register_process_func`
+### 2.10 `ub_comm_queue_register_process_func`
 
 | 项目 | 内容 |
 | --- | --- |

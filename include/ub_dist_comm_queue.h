@@ -114,14 +114,6 @@ typedef struct {
     uint32_t timeout_ms;            /* local minimum peer timeout if heartbeat sequence does not advance */
 } ub_comm_queue_heartbeat_config_t;
 
-typedef struct {
-    uint64_t last_observed_seq;  /* last peer heartbeat sequence observed locally */
-    uint64_t last_change_age_ms; /* local monotonic age since sequence last advanced; UINT64_MAX means never observed */
-    uint32_t timeout_ms;         /* effective timeout used for the queried node */
-    uint8_t node_id;             /* queried node ID */
-    uint8_t alive;               /* local peer_alive snapshot */
-} ub_comm_queue_heartbeat_status_t;
-
 /*
  * @brief Initialize ub share memory communication instance
  * @param handle [out]            : pointer to ub share memory communication instance handle
@@ -190,16 +182,6 @@ int ub_comm_queue_set_congestion_threshold(ub_shm_comm_t *handle, uint8_t priori
 int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle,
                                    const ub_comm_queue_heartbeat_config_t *request,
                                    ub_comm_queue_heartbeat_config_t *effective);
-
-/*
- * @brief Query local observation status of a node's consumer heartbeat.
- * @param handle [in]   : pointer to ub share memory communication instance handle
- * @param node_id [in]  : node ID to query
- * @param status [out]  : heartbeat observation snapshot
- * @return 0 on success, negative error code on failure
- */
-int ub_comm_queue_get_heartbeat_status(ub_shm_comm_t *handle, uint8_t node_id,
-                                       ub_comm_queue_heartbeat_status_t *status);
 
 /*
  * @brief Check node status

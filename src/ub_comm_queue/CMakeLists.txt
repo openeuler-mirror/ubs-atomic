@@ -6,7 +6,3 @@ target_include_directories(ub_comm_queue PUBLIC
     ${PROJECT_SOURCE_DIR}/include/
     ${PROJECT_SOURCE_DIR}/src/common
 )
-
-if (UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT)
-    target_compile_definitions(ub_comm_queue PRIVATE UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT)
-endif ()

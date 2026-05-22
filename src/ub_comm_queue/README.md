@@ -102,20 +102,6 @@
 
 本节点会把 `heartbeat_interval_ms` 发布到公告牌。其他节点判断本节点消费者是否超时时，会使用 `max(local timeout_ms, peer heartbeat_interval_ms * 3, local check_interval_ms * 2)` 作为实际超时窗口，因此不同节点配置不一致时也不会因为“对端心跳慢、本地窗口小”而误判。
 
-### `ub_comm_queue_get_heartbeat_status`
-
-查询本节点对某个节点消费者心跳的本地观察状态。该接口只读本地状态，不读远端共享内存，不影响发送热路径。
-
-返回内容包括：
-
-- `node_id`：被查询节点。
-- `alive`：当前本地 `peer_alive_` 快照。
-- `last_observed_seq`：本节点最近观察到的远端心跳序号。
-- `last_change_age_ms`：从本节点最后一次观察到序号变化到现在的本地单调时间差；`UINT64_MAX` 表示尚未观察到有效心跳。
-- `timeout_ms`：本节点对被查询节点使用的实际心跳超时阈值。
-
-
-
 ### `ub_comm_queue_recv`
 
 当前 `UBShmTransport::recv` 实现返回 `0`，主要收包路径是后台分发线程加回调派发。主动拉取接口保留但尚未实现完整读取逻辑。

@@ -1267,52 +1267,6 @@ int UBShmTransport::config_heartbeat(const ub_comm_queue_heartbeat_config_t *req
     return UB_COMM_OK;
 }
 
-int UBShmTransport::get_heartbeat_status(uint8_t node_id, ub_comm_queue_heartbeat_status_t *status)
-{
-    if (status == nullptr)
-    {
-        return -EINVAL;
-    }
-    if (get_compact_index(node_id) < 0 || node_id >= MAX_NODES_LIMIT)
-    {
-        return UB_COMM_ERR_PEER_NODE_NOT_FOUND;
-    }
-
-    uint64_t now = steady_time_us();
-    uint64_t last_seen = 0;
-    uint64_t age_ms = UINT64_MAX;
-    uint64_t seq = 0;
-    bool alive = false;
-
-    if (node_id == conf_.current_node_id)
-    {
-        seq = local_consumer_heartbeat_seq_.load(std::memory_order_acquire);
-        alive = init_complete_;
-        age_ms = 0;
-    }
-    else
-    {
-        seq = peer_heartbeat_seq_[node_id].load(std::memory_order_acquire);
-        last_seen = peer_heartbeat_seen_us_[node_id].load(std::memory_order_acquire);
-        alive = peer_alive_[node_id].load(std::memory_order_acquire);
-        if (last_seen != 0 && now >= last_seen)
-        {
-            age_ms = (now - last_seen) / US_PER_MS;
-        }
-    }
-
-    uint64_t effective_timeout_us = heartbeat_timeout_us_.load(std::memory_order_acquire);
-    if (node_id != conf_.current_node_id) {
-        effective_timeout_us = peer_heartbeat_timeout_us_[node_id].load(std::memory_order_acquire);
-    }
-    status->timeout_ms = static_cast<uint32_t>(effective_timeout_us / US_PER_MS);
-    status->last_observed_seq = seq;
-    status->last_change_age_ms = age_ms;
-    status->node_id = node_id;
-    status->alive = alive ? 1 : 0;
-    return UB_COMM_OK;
-}
-
 void UBShmTransport::broadcast_flow_config_update(uint8_t priority, uint32_t threshold, uint64_t version)
 {
     if (!init_complete_ || remote_lookup_table_.empty()) {

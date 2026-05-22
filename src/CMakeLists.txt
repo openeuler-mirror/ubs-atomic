@@ -21,10 +21,6 @@ target_include_directories(ubs_atomic PUBLIC
     ${PROJECT_SOURCE_DIR}/src/common
 )
 
-if (UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT)
-    target_compile_definitions(ubs_atomic PRIVATE UB_COMM_QUEUE_ENABLE_HALF_WRITE_INJECT)
-endif ()
-
 set(BOUNDSCHECK_LIB /usr/lib64/libboundscheck.so)
 
 # 链接库到可执行文件

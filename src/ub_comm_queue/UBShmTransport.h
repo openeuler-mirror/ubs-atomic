@@ -112,7 +112,6 @@ public:
     int set_congestion_threshold(uint8_t priority, uint32_t congestion_threshold_percent);
     int config_heartbeat(const ub_comm_queue_heartbeat_config_t *request,
                          ub_comm_queue_heartbeat_config_t *effective);
-    int get_heartbeat_status(uint8_t node_id, ub_comm_queue_heartbeat_status_t *status);
 
     void remove_node_cache(uint32_t node_id);
     void update_cached_congestion_threshold(uint32_t node_id, uint8_t priority, uint32_t threshold, uint64_t version);
