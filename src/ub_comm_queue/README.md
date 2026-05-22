@@ -93,14 +93,14 @@
 
 - `heartbeat_interval_ms`：本节点消费者心跳序号刷新周期。
 - `check_interval_ms`：本节点生产者心跳监控线程轮询周期。
-- `timeout_ms`：本节点观察到某个 peer 心跳序号超过该时间不变化时，认为 peer 消费者超时。
+- `timeout_ms`：本节点观察 peer 的最小超时窗口。
 
 校验规则：
 
 - `heartbeat_interval_ms`、`check_interval_ms`、`timeout_ms` 均必须大于 0。
-- `timeout_ms >= max(3 * heartbeat_interval_ms, 2 * check_interval_ms)`，避免过小阈值造成抖动误判。
+- `timeout_ms >= 2 * check_interval_ms`，避免本地监控线程调度抖动造成误判。
 
-结构体中保留 `size` 字段是为了 ABI 演进。调用方需要将 `size` 填为 `sizeof(ub_comm_queue_heartbeat_config_t)`；未来若结构体尾部追加字段，库可以通过 `size` 判断调用方使用的新旧版本。
+本节点会把 `heartbeat_interval_ms` 发布到公告牌。其他节点判断本节点消费者是否超时时，会使用 `max(local timeout_ms, peer heartbeat_interval_ms * 3, local check_interval_ms * 2)` 作为实际超时窗口，因此不同节点配置不一致时也不会因为“对端心跳慢、本地窗口小”而误判。
 
 ### `ub_comm_queue_get_heartbeat_status`
 
@@ -112,7 +112,7 @@
 - `alive`：当前本地 `peer_alive_` 快照。
 - `last_observed_seq`：本节点最近观察到的远端心跳序号。
 - `last_change_age_ms`：从本节点最后一次观察到序号变化到现在的本地单调时间差；`UINT64_MAX` 表示尚未观察到有效心跳。
-- `timeout_ms`：当前本节点使用的心跳超时阈值。
+- `timeout_ms`：本节点对被查询节点使用的实际心跳超时阈值。
 
 
 
@@ -688,12 +688,12 @@ otherwise          -> UB_COMM_QUEUE_NORMAL
 
 ### 消费者心跳感知
 
-消费者存活感知不使用跨节点时间戳。公告牌 `NodeBoardInfo` 中保存的是 `consumer_heartbeat_seq`，即消费者后台线程周期性递增的序号：
+消费者存活感知不使用跨节点时间戳。公告牌 `NodeBoardInfo` 中保存 `consumer_heartbeat_seq` 和本节点声明的 `heartbeat_interval_ms`：
 
 - 消费者本地后台线程定时执行 `consumer_heartbeat_seq.store(++local_seq, release)`。
 - 生产者本地后台监控线程轮询远端 `consumer_heartbeat_seq`。
 - 如果监控线程看到远端序号变化，就用本节点 `CLOCK_MONOTONIC` 记录 `last_seen_us`。
-- 如果序号长时间不变化，且本地 `now_us - last_seen_us > heartbeat_timeout_us_`，则把本地 `peer_alive_[node_id]` 标记为 false。
+- 如果序号长时间不变化，且本地 `now_us - last_seen_us > max(local timeout, peer heartbeat_interval * 3, local check_interval * 2)`，则把本地 `peer_alive_[node_id]` 标记为 false。
 - `heartbeat_interval_us_`、`heartbeat_check_interval_us_`、`heartbeat_timeout_us_` 可通过 `ub_comm_queue_config_heartbeat` 运行期调整。
 - 发送热路径只读取本地 `peer_alive_` 快照，不读取共享心跳字段。
 
