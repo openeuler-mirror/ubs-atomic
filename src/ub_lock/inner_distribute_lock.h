@@ -84,7 +84,9 @@ private:
     void wake_s_chain(const ub_location_t &location);
     void wake_sx_chain(const ub_location_t &location);
 
-    bool wait_follower_s(LocalLock *local_lock, const steady_time_point &deadline);
+    void dump_timeout_holder_info(const ub_location_t &location, ub_lock_mode_t request_mode, LocalLock *local_lock,
+                                  const char *reason);
+    bool wait_follower_s(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline);
     ub_lock_result_t spin_wait_s_loop(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline);
     ub_lock_result_t spin_wait_x_loop(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline, bool is_recursive);
     ub_lock_result_t spin_wait_sx_loop(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline, bool is_recursive);

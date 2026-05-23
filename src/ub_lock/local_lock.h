@@ -71,6 +71,7 @@ inline void cpu_relax()
 
 namespace ublock {
 
+constexpr int32_t UB_LOCK_OWNER_NODE_SHIFT = 32;
 constexpr int32_t X_LOCK_DECR = 1 << 16;      // 65536
 constexpr int32_t X_LOCK_HALF_DECR = 1 << 15; // 32768
 constexpr uint32_t SPIN_WAIT_ROUNDS = 30;

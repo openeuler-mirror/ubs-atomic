@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -52,6 +53,69 @@ struct MutexLocalLock {
     std::atomic<uint64_t> owner{LOCK_INVALID_OWNER};
     std::atomic<uint32_t> active_users{0};
 };
+
+uint32_t mutex_owner_node(uint64_t owner)
+{
+    return owner == LOCK_INVALID_OWNER ? static_cast<uint32_t>(UB_MAX_NODES) :
+                                         static_cast<uint32_t>(owner >> UB_LOCK_OWNER_NODE_SHIFT);
+}
+
+int32_t mutex_owner_tid(uint64_t owner)
+{
+    return owner == LOCK_INVALID_OWNER ? 0 : static_cast<int32_t>(owner & 0xFFFFFFFFu);
+}
+
+std::string format_mutex_owner(uint64_t owner)
+{
+    if (owner == LOCK_INVALID_OWNER) {
+        return "none";
+    }
+    return "node=" + std::to_string(mutex_owner_node(owner)) + ",tid=" + std::to_string(mutex_owner_tid(owner));
+}
+
+bool mutex_timeout_is_local(const char *wait_scope)
+{
+    return wait_scope != nullptr && wait_scope[0] == 'l';
+}
+
+std::string format_mutex_blocker(const char *wait_scope, uint64_t global_owner, uint32_t global_waiters,
+                                 uint64_t local_owner)
+{
+    if (mutex_timeout_is_local(wait_scope)) {
+        if (local_owner == LOCK_INVALID_OWNER) {
+            return "local_mutex";
+        }
+        return "local_owner(" + format_mutex_owner(local_owner) + ")";
+    }
+    if (global_owner != LOCK_INVALID_OWNER) {
+        return "global_owner(" + format_mutex_owner(global_owner) + ")";
+    }
+    if (global_waiters != 0u) {
+        return "WAITERS(count=" + std::to_string(global_waiters) + ")";
+    }
+    return "UNKNOWN";
+}
+
+void dump_mutex_timeout_info(ub_mutex_lock_t *lock, const ub_location_t &location, const char *wait_scope,
+                             const MutexLocalLock *local_lock)
+{
+    const uint64_t global_owner = lock->lock_owner.load(std::memory_order_acquire);
+    const uint32_t global_waiters = lock->waiting_count.load(std::memory_order_acquire);
+    const uint64_t local_owner =
+        local_lock == nullptr ? LOCK_INVALID_OWNER : local_lock->owner.load(std::memory_order_acquire);
+    const uint32_t local_active_users =
+        local_lock == nullptr ? 0u : local_lock->active_users.load(std::memory_order_acquire);
+    const std::string global_owner_desc = format_mutex_owner(global_owner);
+    const std::string local_owner_desc = format_mutex_owner(local_owner);
+    const std::string blocker = format_mutex_blocker(wait_scope, global_owner, global_waiters, local_owner);
+
+    ATOMIC_LOG(LOG_LEVEL_ERROR,
+               "UB mutex lock timeout: wait=%s request=X node=%u tid=%d lock=%p blocker=%s "
+               "global[owner=%s waiters=%u] local[owner=%s active_users=%u]",
+               wait_scope, static_cast<unsigned>(location.node_id), location.tid, static_cast<void *>(lock),
+               blocker.c_str(), global_owner_desc.c_str(), global_waiters, local_owner_desc.c_str(),
+               local_active_users);
+}
 
 struct MutexLocalLockRegistry {
     std::unordered_map<ub_mutex_lock_t *, std::shared_ptr<MutexLocalLock>> map;
@@ -329,8 +393,8 @@ ub_lock_result_t MutexLock::wait_global_handoff(const steady_time_point &deadlin
     }
 
     if (!global_self_notify && !ctx.wait(deadline)) {
+        dump_mutex_timeout_info(lock_shm_, location, "global", nullptr);
         clean_timeout_waiter(slot);
-        ATOMIC_LOG(LOG_LEVEL_ERROR, "The mutex lock hold timeout");
         return UB_LOCK_TIMEOUT;
     }
     return UB_LOCK_SUCCESS;
@@ -356,6 +420,7 @@ ub_lock_result_t MutexLock::acquire_global(const steady_time_point &deadline, co
         }
 
         if (std::chrono::steady_clock::now() > deadline) {
+            dump_mutex_timeout_info(lock_shm_, location, "global", nullptr);
             if (is_awakened) {
                 clean_timeout_waiter(slot);
             }
@@ -403,7 +468,7 @@ ub_lock_result_t MutexLock::lock(time_ms_t timeout_ms, const ub_location_t &loca
         return UB_LOCK_ERROR;
     }
     if (!local_lock->mtx.try_lock_until(deadline)) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR, "The mutex local lock wait timeout");
+        dump_mutex_timeout_info(lock_shm_, location, "local", local_lock.get());
         release_mutex_local_lock(local_lock);
         return UB_LOCK_TIMEOUT;
     }

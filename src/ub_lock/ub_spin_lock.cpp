@@ -4,6 +4,7 @@
 
 #include "ub_spin_lock.h"
 
+#include <string>
 #include <thread>
 
 #include "ub_atomic_log_print.h"
@@ -21,6 +22,33 @@ constexpr uint32_t SPIN_INIT_WAIT_ROUNDS = 1024 * 1024;
 inline bool is_invalid_node(uint8_t node_id)
 {
     return node_id >= UB_MAX_NODES;
+}
+
+uint32_t spin_owner_node(uint64_t owner)
+{
+    return owner == LOCK_INVALID_OWNER ? static_cast<uint32_t>(UB_MAX_NODES) :
+                                         static_cast<uint32_t>(owner >> UB_LOCK_OWNER_NODE_SHIFT);
+}
+
+int32_t spin_owner_tid(uint64_t owner)
+{
+    return owner == LOCK_INVALID_OWNER ? 0 : static_cast<int32_t>(owner & 0xFFFFFFFFu);
+}
+
+std::string format_spin_owner(uint64_t owner)
+{
+    if (owner == LOCK_INVALID_OWNER) {
+        return "none";
+    }
+    return "node=" + std::to_string(spin_owner_node(owner)) + ",tid=" + std::to_string(spin_owner_tid(owner));
+}
+
+void dump_spin_timeout_info(ub_spin_lock_t *lock, const ub_location_t &location)
+{
+    const uint64_t owner = lock->lock_owner.load(std::memory_order_acquire);
+    const std::string owner_desc = format_spin_owner(owner);
+    ATOMIC_LOG(LOG_LEVEL_ERROR, "UB spin lock timeout: request=X node=%u tid=%d lock=%p owner=%s",
+               static_cast<unsigned>(location.node_id), location.tid, static_cast<void *>(lock), owner_desc.c_str());
 }
 } // namespace
 
@@ -89,6 +117,7 @@ ub_lock_result_t SpinLock::lock(time_ms_t timeout_ms, const ub_location_t &locat
 
         if ((++spin_round % SPIN_YIELD_INTERVAL) == 0) {
             if (std::chrono::steady_clock::now() >= deadline) {
+                dump_spin_timeout_info(lock_shm_, location);
                 return UB_LOCK_TIMEOUT;
             }
             std::this_thread::yield();
