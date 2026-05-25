@@ -4,6 +4,7 @@
 
 #include "ub_mutex_lock.h"
 
+#include <array>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -49,15 +50,25 @@ struct MessageDeleter {
 using MessagePtr = std::unique_ptr<message_t, MessageDeleter>;
 
 struct MutexLocalLock {
-    std::timed_mutex mtx;
     std::atomic<uint64_t> owner{LOCK_INVALID_OWNER};
     std::atomic<uint32_t> active_users{0};
+    std::atomic<uint32_t> waiting_count{0};
+    std::atomic<uint32_t> queue_head{0};
+    std::atomic<uint32_t> queue_tail{0};
+    std::array<local_waiter_t, UB_MAX_CAPACITY> q{};
+
+    MutexLocalLock()
+    {
+        ring_queue_init<UB_MAX_CAPACITY>(queue_head, queue_tail, waiting_count, q.data(), [](local_waiter_t &slot) {
+            slot.mode = UB_LOCK_I;
+            slot.tid = 0;
+        });
+    }
 };
 
 uint32_t mutex_owner_node(uint64_t owner)
 {
-    return owner == LOCK_INVALID_OWNER ? static_cast<uint32_t>(UB_MAX_NODES) :
-                                         static_cast<uint32_t>(owner >> UB_LOCK_OWNER_NODE_SHIFT);
+    return owner == LOCK_INVALID_OWNER ? static_cast<uint32_t>(UB_MAX_NODES) : static_cast<uint32_t>(owner >> 32);
 }
 
 int32_t mutex_owner_tid(uint64_t owner)
@@ -97,24 +108,26 @@ std::string format_mutex_blocker(const char *wait_scope, uint64_t global_owner, 
 }
 
 void dump_mutex_timeout_info(ub_mutex_lock_t *lock, const ub_location_t &location, const char *wait_scope,
-                             const MutexLocalLock *local_lock)
+                              const MutexLocalLock *local_lock)
 {
-    const uint64_t global_owner = lock->lock_owner.load(std::memory_order_acquire);
-    const uint32_t global_waiters = lock->waiting_count.load(std::memory_order_acquire);
+    const uint64_t global_owner = lock == nullptr ? LOCK_INVALID_OWNER : lock->lock_owner.load(std::memory_order_acquire);
+    const uint32_t global_waiters = lock == nullptr ? 0u : lock->waiting_count.load(std::memory_order_acquire);
     const uint64_t local_owner =
         local_lock == nullptr ? LOCK_INVALID_OWNER : local_lock->owner.load(std::memory_order_acquire);
     const uint32_t local_active_users =
         local_lock == nullptr ? 0u : local_lock->active_users.load(std::memory_order_acquire);
+    const uint32_t local_waiters =
+        local_lock == nullptr ? 0u : local_lock->waiting_count.load(std::memory_order_acquire);
     const std::string global_owner_desc = format_mutex_owner(global_owner);
     const std::string local_owner_desc = format_mutex_owner(local_owner);
     const std::string blocker = format_mutex_blocker(wait_scope, global_owner, global_waiters, local_owner);
 
     ATOMIC_LOG(LOG_LEVEL_ERROR,
-               "UB mutex lock timeout: wait=%s request=X node=%u tid=%d lock=%p blocker=%s "
-               "global[owner=%s waiters=%u] local[owner=%s active_users=%u]",
-               wait_scope, static_cast<unsigned>(location.node_id), location.tid, static_cast<void *>(lock),
-               blocker.c_str(), global_owner_desc.c_str(), global_waiters, local_owner_desc.c_str(),
-               local_active_users);
+                "UB mutex lock timeout: wait=%s request=X node=%u tid=%d lock=%p blocker=%s "
+                "global[owner=%s waiters=%u] local[owner=%s waiters=%u active_users=%u]",
+                wait_scope, static_cast<unsigned>(location.node_id), location.tid, static_cast<void *>(lock),
+                blocker.c_str(), global_owner_desc.c_str(), global_waiters, local_owner_desc.c_str(), local_waiters,
+                local_active_users);
 }
 
 struct MutexLocalLockRegistry {
@@ -149,6 +162,125 @@ void release_mutex_local_lock(const std::shared_ptr<MutexLocalLock> &local_lock)
     }
 }
 
+ub_lock_result_t enqueue_mutex_local_waiter(MutexLocalLock &local_lock, int32_t tid, uint32_t &out_ticket)
+{
+    return ring_queue_enqueue<UB_MAX_CAPACITY>(
+        local_lock.queue_head, local_lock.queue_tail, local_lock.waiting_count, local_lock.q.data(),
+        [&](local_waiter_t &slot) {
+            slot.mode = UB_LOCK_X;
+            slot.tid = tid;
+        },
+        out_ticket);
+}
+
+void clean_mutex_local_timeout_waiter(MutexLocalLock &local_lock, uint32_t ticket)
+{
+    ring_queue_clean_timeout<UB_MAX_CAPACITY>(local_lock.queue_head, local_lock.queue_tail, local_lock.waiting_count,
+                                              local_lock.q.data(), ticket);
+}
+
+void clean_mutex_local_outqueue_waiter(MutexLocalLock &local_lock, uint32_t ticket)
+{
+    ring_queue_pop_head<UB_MAX_CAPACITY>(local_lock.queue_head, local_lock.queue_tail, local_lock.waiting_count,
+                                         local_lock.q.data(), ticket);
+}
+
+void wake_one_mutex_local_waiter(MutexLocalLock &local_lock)
+{
+    int sanity = UB_MAX_CAPACITY * 2;
+    while (sanity-- > 0) {
+        ring_queue_advance_dead_head<UB_MAX_CAPACITY>(local_lock.queue_head, local_lock.queue_tail,
+                                                      local_lock.q.data());
+        const uint32_t ticket = local_lock.queue_head.load(std::memory_order_acquire);
+        local_waiter_t *waiter = nullptr;
+        if (ring_queue_outqueue<UB_MAX_CAPACITY>(local_lock.queue_head, local_lock.waiting_count, local_lock.q.data(),
+                                                 waiter) == UB_LOCK_SUCCESS) {
+            const bool found = WaiterRegistry::instance().notify_local_waiter(waiter->tid);
+            if (found) {
+                return;
+            }
+            ATOMIC_LOG(LOG_LEVEL_WARN, "mutex local wait ctx has been notified: %d", waiter->tid);
+            clean_mutex_local_outqueue_waiter(local_lock, ticket);
+            continue;
+        }
+        if (local_lock.waiting_count.load(std::memory_order_acquire) == 0) {
+            return;
+        }
+    }
+}
+
+ub_lock_result_t lock_mutex_local(ub_mutex_lock_t *lock, MutexLocalLock &local_lock, uint64_t identify,
+                                  const ub_location_t &location, const steady_time_point &deadline)
+{
+    uint32_t slot = 0;
+    bool is_awakened = false;
+
+    while (true) {
+        for (uint32_t i = 0; i < SPIN_WAIT_ROUNDS; ++i) {
+            if (local_lock.waiting_count.load(std::memory_order_acquire) > 0 && !is_awakened) {
+                break;
+            }
+
+            uint64_t expected = LOCK_INVALID_OWNER;
+            if (local_lock.owner.compare_exchange_weak(expected, identify, std::memory_order_acq_rel,
+                                                       std::memory_order_acquire)) {
+                if (is_awakened) {
+                    clean_mutex_local_outqueue_waiter(local_lock, slot);
+                }
+                return UB_LOCK_SUCCESS;
+            }
+
+            if (is_awakened) {
+                cpu_relax();
+                --i;
+                if (std::chrono::steady_clock::now() > deadline) {
+                    dump_mutex_timeout_info(lock, location, "local", &local_lock);
+                    clean_mutex_local_timeout_waiter(local_lock, slot);
+                    return UB_LOCK_TIMEOUT;
+                }
+                continue;
+            }
+            if ((i & 0xF) == 0) {
+                cpu_relax();
+            }
+        }
+
+        local_wait_ctx_t ctx;
+        WaiterGuard guard(location.tid, &ctx);
+        ub_lock_result_t ret = enqueue_mutex_local_waiter(local_lock, location.tid, slot);
+        if (ret != UB_LOCK_SUCCESS) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "The mutex local waiting queue is full");
+            return ret;
+        }
+
+        bool self_handoff = false;
+        if (local_lock.owner.load(std::memory_order_acquire) == LOCK_INVALID_OWNER) {
+            self_handoff = ring_queue_try_self_handoff_if_head<UB_MAX_CAPACITY>(
+                local_lock.queue_head, local_lock.queue_tail, local_lock.q.data(), slot);
+        }
+
+        if (!self_handoff && !ctx.wait(deadline)) {
+            dump_mutex_timeout_info(lock, location, "local", &local_lock);
+            clean_mutex_local_timeout_waiter(local_lock, slot);
+            return UB_LOCK_TIMEOUT;
+        }
+        is_awakened = true;
+    }
+}
+
+void unlock_mutex_local(MutexLocalLock &local_lock, uint64_t identify)
+{
+    const uint64_t owner = local_lock.owner.load(std::memory_order_acquire);
+    if (owner != identify) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "mutex local unlock failed because caller does not own the local lock");
+        return;
+    }
+    local_lock.owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
+    if (local_lock.waiting_count.load(std::memory_order_acquire) > 0) {
+        wake_one_mutex_local_waiter(local_lock);
+    }
+}
+
 void register_mutex_local_lock(ub_mutex_lock_t *shm, std::shared_ptr<MutexLocalLock> ll)
 {
     std::unique_lock<std::shared_mutex> lk(g_mutex_local_registry.mtx);
@@ -163,6 +295,7 @@ std::shared_ptr<MutexLocalLock> unregister_mutex_local_lock_if_idle(ub_mutex_loc
         auto it = g_mutex_local_registry.map.find(shm);
         if (it != g_mutex_local_registry.map.end() &&
             it->second->owner.load(std::memory_order_acquire) == LOCK_INVALID_OWNER &&
+            it->second->waiting_count.load(std::memory_order_acquire) == 0u &&
             it->second->active_users.load(std::memory_order_acquire) == 0u) {
             ll_holder = std::move(it->second);
             g_mutex_local_registry.map.erase(it);
@@ -467,20 +600,20 @@ ub_lock_result_t MutexLock::lock(time_ms_t timeout_ms, const ub_location_t &loca
         release_mutex_local_lock(local_lock);
         return UB_LOCK_ERROR;
     }
-    if (!local_lock->mtx.try_lock_until(deadline)) {
-        dump_mutex_timeout_info(lock_shm_, location, "local", local_lock.get());
+
+    ub_lock_result_t local_ret = lock_mutex_local(lock_shm_, *local_lock, identify, location, deadline);
+    if (local_ret != UB_LOCK_SUCCESS) {
         release_mutex_local_lock(local_lock);
-        return UB_LOCK_TIMEOUT;
+        return local_ret;
     }
 
     ub_lock_result_t ret = acquire_global(deadline, location);
     if (ret == UB_LOCK_SUCCESS) {
-        local_lock->owner.store(identify, std::memory_order_release);
         release_mutex_local_lock(local_lock);
         return UB_LOCK_SUCCESS;
     }
 
-    local_lock->mtx.unlock();
+    unlock_mutex_local(*local_lock, identify);
     release_mutex_local_lock(local_lock);
     return ret;
 }
@@ -517,11 +650,10 @@ ub_lock_result_t MutexLock::unlock(const ub_location_t &location)
         release_mutex_local_lock(local_lock);
         return UB_LOCK_ERROR;
     }
-    local_lock->owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
     if (lock_shm_->waiting_count.load(std::memory_order_acquire) > 0) {
         wake_one_waiter(location);
     }
-    local_lock->mtx.unlock();
+    unlock_mutex_local(*local_lock, identify);
     release_mutex_local_lock(local_lock);
     return UB_LOCK_SUCCESS;
 }
