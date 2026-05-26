@@ -151,7 +151,7 @@ void on_peer_exit(const message_t *msg, void *ctx)
 {
     UBShmTransport *self = (UBShmTransport *)ctx;
     uint32_t dead_node = msg->header.src_node_id;
-    ATOMIC_LOG(LOG_LEVEL_WARN, "Peer ", dead_node, " went down. Cleaning caches.");
+    ATOMIC_LOG(LOG_LEVEL_WARN, "Peer %u went down. Cleaning caches.", dead_node);
     self->remove_node_cache(dead_node);
 }
 
@@ -963,7 +963,7 @@ int UBShmTransport::send(const message_t *msg)
     }
     if (__builtin_expect(dest_id != conf_.current_node_id && dest_id < MAX_NODES_LIMIT &&
                          !peer_alive_[dest_id].load(std::memory_order_acquire), 0)) {
-        ATOMIC_LOG(LOG_LEVEL_WARN, "Send failed: destination consumer heartbeat timeout, node=%u", dest_id);
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: destination consumer heartbeat timeout, node=%u", dest_id);
         return UB_COMM_ERR_PEER_NOT_READY;
     }
 
