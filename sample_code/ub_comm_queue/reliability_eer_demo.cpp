@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -87,6 +88,7 @@ uint32_t g_send_interval_us = 1000;
 uint32_t g_fault_after_ms = 0;
 uint32_t g_resume_after_ms = 0;
 pid_t g_peer_pid = -1;
+std::string g_case = "service";
 Context g_ctx;
 
 int my_stdout_logger(int level, const char *file, const char *func, uint32_t line, const char *message)
@@ -130,6 +132,23 @@ void cpu_relax()
 #else
     asm volatile("" ::: "memory");
 #endif
+}
+
+void wait_enter(const char *message)
+{
+    printf("\n%s\n", message);
+    printf("确认操作完成后按 Enter 继续...");
+    fflush(stdout);
+
+    int ch = getchar();
+    while (ch != '\n' && ch != EOF) {
+        ch = getchar();
+    }
+}
+
+bool is_case(const char *name)
+{
+    return g_case == name || g_case == "all";
 }
 
 int init_ub_shm()
@@ -377,10 +396,51 @@ void maybe_drive_peer_fault()
     }).detach();
 }
 
+void prompt_peer_pause(const char *case_id)
+{
+    if (g_peer_pid > 0 && g_fault_after_ms > 0) {
+        maybe_drive_peer_fault();
+        printf("[%s] will auto SIGSTOP peer pid=%d after %u ms\n", case_id, static_cast<int>(g_peer_pid),
+               g_fault_after_ms);
+        return;
+    }
+
+    char message[512];
+    snprintf(message, sizeof(message),
+             "[%s] 手动故障注入点：请现在暂停接收端 B。\n"
+             "  在 B 节点执行：kill -STOP <B端pid>\n"
+             "  B 端启动时会打印 pid；如果是跨节点，请在 B 节点终端操作。\n"
+             "  A 端按 Enter 后会开始轮询发送，并等待心跳超时被感知。",
+             case_id);
+    wait_enter(message);
+}
+
+void prompt_peer_resume(const char *case_id)
+{
+    if (g_peer_pid > 0 && g_resume_after_ms > 0) {
+        printf("[%s] auto SIGCONT was scheduled for peer pid=%d after %u ms\n", case_id, static_cast<int>(g_peer_pid),
+               g_resume_after_ms);
+        return;
+    }
+
+    char message[512];
+    snprintf(message, sizeof(message),
+             "[%s] 已感知 B 端不可用。请现在恢复接收端 B。\n"
+             "  在 B 节点执行：kill -CONT <B端pid>\n"
+             "  如果 B 是被 kill 掉的，请重新启动 B：./reliability_eer_demo --role B --case service ...\n"
+             "  A 端按 Enter 后会等待 B ready 并发送恢复探测消息。",
+             case_id);
+    wait_enter(message);
+}
+
 bool run_send_eer_case()
 {
     printf("[UBCQ_2N_SEND_EER_001] start public-API send pressure\n");
-    printf("[UBCQ_2N_SEND_EER_001] for true half-write, kill/stop role A during this phase from outside\n");
+    printf("[UBCQ_2N_SEND_EER_001] A pid=%d\n", static_cast<int>(getpid()));
+    printf("[UBCQ_2N_SEND_EER_001] public API cannot force a half-written slot at an exact instruction.\n");
+    printf("[UBCQ_2N_SEND_EER_001] For destructive validation, kill/stop A during the send loop, then run "
+           "`--case probe` after B recovers.\n");
+    wait_enter("[UBCQ_2N_SEND_EER_001] 即将启动生产端并发发送。请确认 B 端正在运行，然后按 Enter 开始。");
 
     const uint32_t expected = g_threads * g_messages;
     const uint32_t ack_before = g_ctx.ack_count.load(std::memory_order_acquire);
@@ -414,6 +474,21 @@ bool run_send_eer_case()
     return wait_counter(g_ctx.recovery_ack_count, recovery_before + 1, 3000, "post-recovery ack");
 }
 
+bool run_recovery_probe_case()
+{
+    printf("[UBCQ_RECOVERY_PROBE] send one recovery probe message\n");
+    if (!wait_peer_ready(g_ctx.handle, g_ctx.peer_node, g_wait_peer_timeout_s)) {
+        fprintf(stderr, "[UBCQ_RECOVERY_PROBE] peer is not ready within %d seconds\n", g_wait_peer_timeout_s);
+        return false;
+    }
+
+    const uint32_t recovery_before = g_ctx.recovery_ack_count.load(std::memory_order_acquire);
+    if (!send_with_retry(g_ctx.peer_node, TYPE_EER_DATA, CASE_RECOVERY_PROBE, 0, 3000)) {
+        return false;
+    }
+    return wait_counter(g_ctx.recovery_ack_count, recovery_before + 1, 5000, "recovery probe ack");
+}
+
 bool run_receiver_eer_case(bool query_default)
 {
     const char *case_id = query_default ? "UBCQ_2N_RCV_EER_002" : "UBCQ_2N_RCV_EER_001";
@@ -433,7 +508,7 @@ bool run_receiver_eer_case(bool query_default)
     printf("[%s] local heartbeat interval=%u check=%u timeout=%u\n", case_id,
            effective.heartbeat_interval_ms, effective.check_interval_ms, effective.timeout_ms);
 
-    maybe_drive_peer_fault();
+    prompt_peer_pause(case_id);
 
     const auto detect_deadline = std::chrono::steady_clock::now() + 30s;
     uint32_t seq = 0;
@@ -471,7 +546,8 @@ bool run_receiver_eer_case(bool query_default)
         return false;
     }
 
-    printf("[%s] waiting peer recovery; if role B was SIGSTOPed manually, run: kill -CONT <pid>\n", case_id);
+    prompt_peer_resume(case_id);
+    printf("[%s] waiting peer recovery\n", case_id);
     if (!wait_peer_ready(g_ctx.handle, g_ctx.peer_node, g_wait_peer_timeout_s)) {
         fprintf(stderr, "[%s] peer did not recover within %d seconds\n", case_id, g_wait_peer_timeout_s);
         return false;
@@ -486,21 +562,33 @@ bool run_receiver_eer_case(bool query_default)
 
 int run_role_a()
 {
-    if (!wait_peer_ready(g_ctx.handle, g_ctx.peer_node, g_wait_peer_timeout_s)) {
+    if (g_case != "if" && !wait_peer_ready(g_ctx.handle, g_ctx.peer_node, g_wait_peer_timeout_s)) {
         fprintf(stderr, "Peer node is not ready within %d seconds\n", g_wait_peer_timeout_s);
         return 1;
     }
 
-    bool ok = run_send_eer_case();
-    ok = run_receiver_eer_case(true) && ok;
-    ok = run_receiver_eer_case(false) && ok;
-    ok = run_interface_cases() && ok;
+    bool ok = true;
+    if (is_case("send")) {
+        ok = run_send_eer_case() && ok;
+    }
+    if (is_case("rcv-default")) {
+        ok = run_receiver_eer_case(true) && ok;
+    }
+    if (is_case("rcv-normal")) {
+        ok = run_receiver_eer_case(false) && ok;
+    }
+    if (is_case("if")) {
+        ok = run_interface_cases() && ok;
+    }
+    if (g_case == "probe") {
+        ok = run_recovery_probe_case() && ok;
+    }
 
     if (ok) {
-        printf("PASS: role A reliability EER cases finished\n");
+        printf("PASS: role A reliability EER case '%s' finished\n", g_case.c_str());
         return 0;
     }
-    fprintf(stderr, "FAIL: role A reliability EER cases failed\n");
+    fprintf(stderr, "FAIL: role A reliability EER case '%s' failed\n", g_case.c_str());
     return 2;
 }
 
@@ -539,6 +627,8 @@ void print_help(const char *prog)
 {
     printf("Usage: %s --role A|B [options]\n", prog);
     printf("  --role/-o             process role. A runs validation, B runs receiver service\n");
+    printf("  --case <name>         role A: send|rcv-normal|rcv-default|if|probe|all\n");
+    printf("                        role B: service, default service\n");
     printf("  -s <name>             sender shared memory name, default shm_node0_export\n");
     printf("  -r <name>             receiver shared memory name, default shm_node1_export\n");
     printf("  -n <count>            messages per sender thread, default 512\n");
@@ -558,10 +648,12 @@ bool parse_args(int argc, char **argv)
         OPT_FAULT_AFTER = 1000,
         OPT_RESUME_AFTER,
         OPT_PEER_PID,
+        OPT_CASE,
     };
 
     static struct option long_options[] = {
         {"role", required_argument, nullptr, OPT_ROLE},
+        {"case", required_argument, nullptr, OPT_CASE},
         {"fault-after-ms", required_argument, nullptr, OPT_FAULT_AFTER},
         {"resume-after-ms", required_argument, nullptr, OPT_RESUME_AFTER},
         {"peer-pid", required_argument, nullptr, OPT_PEER_PID},
@@ -573,6 +665,9 @@ bool parse_args(int argc, char **argv)
         switch (opt) {
             case OPT_ROLE:
                 g_role = optarg[0];
+                break;
+            case OPT_CASE:
+                g_case = optarg;
                 break;
             case 's':
                 strncpy(g_sender_shm_name, optarg, sizeof(g_sender_shm_name) - 1);
@@ -619,6 +714,20 @@ bool parse_args(int argc, char **argv)
     }
     if (g_messages == 0 || g_threads == 0) {
         fprintf(stderr, "messages and threads must be greater than 0\n");
+        return false;
+    }
+    if (g_case != "send" && g_case != "rcv-normal" && g_case != "rcv-default" && g_case != "if" &&
+        g_case != "probe" && g_case != "all" && g_case != "service") {
+        fprintf(stderr, "Invalid case '%s'\n", g_case.c_str());
+        print_help(argv[0]);
+        return false;
+    }
+    if (g_role == 'A' && g_case == "service") {
+        fprintf(stderr, "role A must specify --case send|rcv-normal|rcv-default|if|probe|all\n");
+        return false;
+    }
+    if (g_role == 'B' && g_case != "service") {
+        fprintf(stderr, "role B only supports --case service\n");
         return false;
     }
     return true;
