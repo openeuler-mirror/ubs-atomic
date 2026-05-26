@@ -12,11 +12,11 @@
 #include "ub_dist_lock.h"
 
 struct alignas(UB_CACHELINE_SIZE) ub_mutex_lock {
-    std::atomic<uint64_t> lock_owner;     /* LOCK_INVALID_OWNER: unlocked, otherwise NodeID + TID */
-    std::atomic<uint32_t> waiting_count;  /* fast-path waiter indicator */
-    std::atomic<uint32_t> queue_head;     /* wait queue head index */
-    std::atomic<uint32_t> queue_tail;     /* wait queue tail index */
-    std::atomic<int32_t> is_inited;       /* 0: empty, 1: initializing, 2: ready */
+    std::atomic<uint64_t> lock_owner;    /* LOCK_INVALID_OWNER: unlocked, otherwise NodeID + TID */
+    std::atomic<uint32_t> waiting_count; /* fast-path waiter indicator */
+    std::atomic<uint32_t> queue_head;    /* wait queue head index */
+    std::atomic<uint32_t> queue_tail;    /* wait queue tail index */
+    std::atomic<int32_t> is_inited;      /* 0: empty, 1: initializing, 2: ready */
     uint8_t _pad[40];
     ub_waiter_t wait_queue[UB_MAX_NODES]; /* FIFO wait queue */
 };

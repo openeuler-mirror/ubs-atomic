@@ -47,14 +47,14 @@ struct alignas(UB_CACHELINE_SIZE) ub_rw_lock {
     std::atomic<uint32_t> queue_tail; /* wait queue tail index */
     uint8_t _pad_qh[60];
 
-    std::atomic<uint64_t> lock_owner_x;       /* exclusive lock owner */
-    std::atomic<uint64_t> lock_owner_sx;      /* shared-exclusive owner */
-    std::atomic<uint64_t> reserve_lock_owner; /* delayed-release owner */
-    std::atomic<uint32_t> sx_recursive;       /* number of recursive sx lock */
-    std::atomic<uint32_t> x_recursive;        /* number of recursive x lock */
-    std::atomic<int32_t> is_inited;           /* initialization flag */
+    std::atomic<uint64_t> lock_owner_x;        /* exclusive lock owner */
+    std::atomic<uint64_t> lock_owner_sx;       /* shared-exclusive owner */
+    std::atomic<uint64_t> reserve_lock_owner;  /* delayed-release owner */
+    std::atomic<uint32_t> sx_recursive;        /* number of recursive sx lock */
+    std::atomic<uint32_t> x_recursive;         /* number of recursive x lock */
+    std::atomic<int32_t> is_inited;            /* initialization flag */
     std::atomic<uint32_t> shared_owner_bitmap; /* bitmap of processes holding s locks */
-    uint8_t _pad_misc[24];                    /* Fill remaining 24 bytes */
+    uint8_t _pad_misc[24];                     /* Fill remaining 24 bytes */
 
     ub_waiter_t wait_queue[UB_MAX_NODES];  /* FIFO wait queue */
     uintptr_t node_registry[UB_MAX_NODES]; /* UB lock table */

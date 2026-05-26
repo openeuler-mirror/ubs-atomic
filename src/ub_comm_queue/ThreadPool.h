@@ -30,8 +30,8 @@ public:
 
 private:
     void runWorkerLoop();
-    bool waitForTask(std::unique_lock<std::mutex>& lock);
-    bool tryDequeueTask(std::function<void()>& task);
+    bool waitForTask(std::unique_lock<std::mutex> &lock);
+    bool tryDequeueTask(std::function<void()> &task);
     void executeDrainPhase();
 
     std::vector<std::thread> threads_;
@@ -41,25 +41,25 @@ private:
     std::atomic<bool> shuttingDown_;
 };
 
-inline ThreadPool::ThreadPool(size_t threadCount)
-    : shuttingDown_(false)
+inline ThreadPool::ThreadPool(size_t threadCount) : shuttingDown_(false)
 {
     for (size_t i = 0; i < threadCount; ++i) {
         threads_.emplace_back(&ThreadPool::runWorkerLoop, this);
     }
 }
 
-inline bool ThreadPool::waitForTask(std::unique_lock<std::mutex>& lock)
+inline bool ThreadPool::waitForTask(std::unique_lock<std::mutex> &lock)
 {
-    taskAvailable_.wait(lock,
-        [this] { return shuttingDown_.load(std::memory_order_acquire) || !taskQueue_.empty(); });
+    taskAvailable_.wait(lock, [this] { return shuttingDown_.load(std::memory_order_acquire) || !taskQueue_.empty(); });
     return !taskQueue_.empty();
 }
 
-inline bool ThreadPool::tryDequeueTask(std::function<void()>& task)
+inline bool ThreadPool::tryDequeueTask(std::function<void()> &task)
 {
     std::unique_lock<std::mutex> lock(mtx_);
-    if (taskQueue_.empty() && !waitForTask(lock)) return false;
+    if (taskQueue_.empty() && !waitForTask(lock)) {
+        return false;
+    }
     task = std::move(taskQueue_.front());
     taskQueue_.pop();
     return true;
@@ -82,7 +82,9 @@ inline void ThreadPool::runWorkerLoop()
     // Phase 1: Normal operation — process tasks until shutdown signal
     while (!shuttingDown_.load(std::memory_order_acquire)) {
         std::function<void()> task;
-        if (!tryDequeueTask(task)) break;
+        if (!tryDequeueTask(task)) {
+            break;
+        }
         task();
     }
 
@@ -91,8 +93,7 @@ inline void ThreadPool::runWorkerLoop()
 }
 
 template <class F, class... Args>
-auto ThreadPool::enqueue(F &&f, Args &&...args)
-    -> std::future<std::invoke_result_t<F, Args...>>
+auto ThreadPool::enqueue(F &&f, Args &&...args) -> std::future<std::invoke_result_t<F, Args...>>
 {
     using return_type = std::invoke_result_t<F, Args...>;
     using task_type = std::packaged_task<return_type()>;

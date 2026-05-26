@@ -81,7 +81,6 @@ bool ub_comm_queue_check_ready(ub_shm_comm_t *handle, const uint8_t node_id)
     return tspt->query_inited(node_id);
 }
 
-
 int ub_comm_queue_send(ub_shm_comm_t *handle, const message_t *msg)
 {
     if (handle == nullptr || *handle == nullptr || msg == nullptr) {
@@ -104,8 +103,7 @@ int ub_comm_queue_send(ub_shm_comm_t *handle, const message_t *msg)
     return tspt->send(msg);
 }
 
-int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t priority,
-                             ub_comm_queue_status_t *status)
+int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t priority, ub_comm_queue_status_t *status)
 {
     if (handle == nullptr || *handle == nullptr || status == nullptr) {
         return -EINVAL;
@@ -124,6 +122,17 @@ int ub_comm_queue_set_congestion_threshold(ub_shm_comm_t *handle, uint8_t priori
 
     UBShmTransport *tspt = static_cast<UBShmTransport *>(*handle);
     return tspt->set_congestion_threshold(priority, congestion_threshold_percent);
+}
+
+int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle, const ub_comm_queue_heartbeat_config_t *request,
+                                   ub_comm_queue_heartbeat_config_t *effective)
+{
+    if (handle == nullptr || *handle == nullptr) {
+        return -EINVAL;
+    }
+
+    UBShmTransport *tspt = static_cast<UBShmTransport *>(*handle);
+    return tspt->config_heartbeat(request, effective);
 }
 
 int ub_comm_queue_recv(ub_shm_comm_t *handle, void *buffer, uint32_t length)

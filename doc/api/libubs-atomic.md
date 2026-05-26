@@ -189,6 +189,14 @@ void setup_log(void)
 | `UB_COMM_QUEUE_CONGESTED` | `used >= congestion_threshold && used < total` |
 | `UB_COMM_QUEUE_FULL` | `used >= total` |
 
+#### `ub_comm_queue_heartbeat_config_t`
+
+| 字段 | 类型 | 说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `heartbeat_interval_ms` | `uint32_t` | 本节点消费者心跳序号刷新周期，单位毫秒；会发布给其他节点用于超时窗口计算 | 必须大于 0 |
+| `check_interval_ms` | `uint32_t` | 本节点生产者心跳监控线程轮询周期，单位毫秒 | 必须大于 0 |
+| `timeout_ms` | `uint32_t` | 本节点观察 peer 的最小超时阈值，单位毫秒 | 必须大于 0，且不小于 `2 * check_interval_ms` |
+
 ### 2.3 `ub_comm_queue_init`
 
 | 项目 | 内容 |
@@ -308,7 +316,45 @@ void setup_log(void)
 - 只更新当前节点本地 Ring。远端生产者写入该 Ring 时会从共享 Ring 对象读取到新阈值。
 - 默认阈值语义可用 `80` 恢复到常见的 80% 水位。
 
-### 2.8 `ub_comm_queue_check_ready`
+### 2.8 `ub_comm_queue_config_heartbeat`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_comm_queue_config_heartbeat` |
+| 接口描述 | 设置或查询当前通信实例的本地心跳配置。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle, const ub_comm_queue_heartbeat_config_t *request, ub_comm_queue_heartbeat_config_t *effective);` |
+| 返回参数 | 成功返回 `0`；失败返回负数错误码。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
+| `request` | `const ub_comm_queue_heartbeat_config_t *` | 请求设置的心跳配置 | 可为空；非空时字段满足 2.2 中规格 |
+| `effective` | `ub_comm_queue_heartbeat_config_t *` | 输出最终生效配置 | 可为空 |
+
+**约束与注意事项**
+
+- `request == NULL && effective != NULL` 表示只查询当前配置。
+- `request != NULL && effective == NULL` 表示只设置配置。
+- `request != NULL && effective != NULL` 表示设置后返回最终生效配置。
+- `request` 和 `effective` 不能同时为 `NULL`。
+- 该接口只影响后台心跳线程，不修改收发热路径。
+- 本节点发布 `heartbeat_interval_ms` 后，其他节点会用它放大对本节点的实际超时窗口，避免节点间心跳配置不一致导致误判。
+- 本节点观察某个 peer 的实际超时窗口为 `max(timeout_ms, peer heartbeat_interval_ms * 3, check_interval_ms * 2)`。
+
+**使用样例**
+
+```c
+ub_comm_queue_heartbeat_config_t req = {
+    .heartbeat_interval_ms = 100,
+    .check_interval_ms = 100,
+    .timeout_ms = 1000,
+};
+ub_comm_queue_heartbeat_config_t eff = {0};
+int ret = ub_comm_queue_config_heartbeat(&handle, &req, &eff);
+```
+
+### 2.9 `ub_comm_queue_check_ready`
 
 | 项目 | 内容 |
 | --- | --- |
@@ -323,21 +369,10 @@ void setup_log(void)
 | `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
 | `node_id` | `uint8_t` | 待查询节点 ID | 应存在于节点映射表 |
 
-### 2.9 `ub_comm_queue_recv`
+**约束与注意事项**
 
-| 项目 | 内容 |
-| --- | --- |
-| 名称 | `ub_comm_queue_recv` |
-| 接口描述 | 主动接收接口。当前主要收包路径为后台分发线程加回调派发，该接口为保留能力。 |
-| 接口类型 | 函数 |
-| 函数原型 | `int ub_comm_queue_recv(ub_shm_comm_t *handle, void *buffer, uint32_t length);` |
-| 返回参数 | 参数有效时当前实现返回 `0`；参数错误返回 `-EINVAL`。 |
+- 当前不建议业务依赖该接口完成收包；请优先使用 `ub_comm_queue_register_process_func` 注册回调。
 
-| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
-| --- | --- | --- | --- |
-| `handle` | `ub_shm_comm_t *` | 通信实例句柄指针 | 非空，且 `*handle` 有效 |
-| `buffer` | `void *` | 接收缓冲区 | 非空 |
-| `length` | `uint32_t` | 缓冲区长度 | 应为 `buffer` 的真实可写长度 |
 
 **约束与注意事项**
 

@@ -114,12 +114,12 @@ void dump_mutex_timeout_info(ub_mutex_lock_t *lock, const ub_location_t &locatio
     const uint64_t global_owner = lock == nullptr ? LOCK_INVALID_OWNER :
                                                     lock->lock_owner.load(std::memory_order_acquire);
     const uint32_t global_waiters = lock == nullptr ? 0u : lock->waiting_count.load(std::memory_order_acquire);
-    const uint64_t local_owner =
-        local_lock == nullptr ? LOCK_INVALID_OWNER : local_lock->owner.load(std::memory_order_acquire);
+    const uint64_t local_owner = local_lock == nullptr ? LOCK_INVALID_OWNER :
+                                                         local_lock->owner.load(std::memory_order_acquire);
     const uint32_t local_active_users =
         local_lock == nullptr ? 0u : local_lock->active_users.load(std::memory_order_acquire);
-    const uint32_t local_waiters =
-        local_lock == nullptr ? 0u : local_lock->waiting_count.load(std::memory_order_acquire);
+    const uint32_t local_waiters = local_lock == nullptr ? 0u :
+                                                           local_lock->waiting_count.load(std::memory_order_acquire);
     const std::string global_owner_desc = format_mutex_owner(global_owner);
     const std::string local_owner_desc = format_mutex_owner(local_owner);
     const std::string blocker = format_mutex_blocker(wait_scope, global_owner, global_waiters, local_owner);
@@ -394,12 +394,7 @@ static message_t *create_mutex_message(const ub_location_t &waiter_location, uin
     uint32_t body_len = sizeof(local_msg_body_t);
     msg->body = new char[body_len];
 
-    local_msg_body_t body = {
-        .tid = waiter_location.tid,
-        .addr = nullptr,
-        .type = UB_GRANT,
-        .mode = UB_LOCK_X
-    };
+    local_msg_body_t body = {.tid = waiter_location.tid, .addr = nullptr, .type = UB_GRANT, .mode = UB_LOCK_X};
     std::memcpy(msg->body, &body, body_len);
 
     msg->header.body_length = body_len;
@@ -414,10 +409,10 @@ static message_t *create_mutex_message(const ub_location_t &waiter_location, uin
 void MutexLock::create_wait_queue()
 {
     ring_queue_init<UB_MAX_NODES>(lock_shm_->queue_head, lock_shm_->queue_tail, lock_shm_->waiting_count,
-                                lock_shm_->wait_queue, [](ub_waiter_t &slot) {
-                                    slot.mode = UB_LOCK_I;
-                                    slot.location = ub_location_t{.tid = 0, .node_id = 0xFF};
-                                });
+                                  lock_shm_->wait_queue, [](ub_waiter_t &slot) {
+                                      slot.mode = UB_LOCK_I;
+                                      slot.location = ub_location_t{.tid = 0, .node_id = 0xFF};
+                                  });
 }
 
 ub_lock_result_t MutexLock::enqueue_waiter(const ub_location_t &location, uint32_t &out_ticket)
@@ -472,8 +467,7 @@ void MutexLock::wake_one_waiter(const ub_location_t &location)
 {
     int sanity = MUTEX_WAKE_SCAN_LIMIT;
     while (sanity-- > 0) {
-        ring_queue_advance_dead_head<UB_MAX_NODES>(lock_shm_->queue_head, lock_shm_->queue_tail,
-                                                   lock_shm_->wait_queue);
+        ring_queue_advance_dead_head<UB_MAX_NODES>(lock_shm_->queue_head, lock_shm_->queue_tail, lock_shm_->wait_queue);
         const uint32_t ticket = lock_shm_->queue_head.load(std::memory_order_acquire);
         ub_waiter_t *waiter = nullptr;
         if (ring_queue_outqueue<UB_MAX_NODES>(lock_shm_->queue_head, lock_shm_->waiting_count, lock_shm_->wait_queue,
@@ -513,9 +507,8 @@ void MutexLock::lock_create()
     if (state != MUTEX_READY) {
         int32_t expected = state;
         const bool can_init = state == MUTEX_INIT_EMPTY || state < MUTEX_INIT_EMPTY || state > MUTEX_READY;
-        if (can_init &&
-            lock_shm_->is_inited.compare_exchange_strong(expected, MUTEX_INITING, std::memory_order_acq_rel,
-                                                         std::memory_order_acquire)) {
+        if (can_init && lock_shm_->is_inited.compare_exchange_strong(expected, MUTEX_INITING, std::memory_order_acq_rel,
+                                                                     std::memory_order_acquire)) {
             std::memset(lock_shm_->_pad, 0, sizeof(lock_shm_->_pad));
             lock_shm_->lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_relaxed);
             create_wait_queue();

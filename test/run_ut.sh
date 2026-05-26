@@ -24,19 +24,6 @@ pwd
 [ ! -d ${build_dir} ] && mkdir -p ${build_dir}
 rm -rf ${build_dir}/*
 
-cp -r $CURRENT_PATH/3rdparty/mockcpp_support_arm64.patch $CURRENT_PATH/3rdparty/mockcpp
-cd $CURRENT_PATH/3rdparty/mockcpp
-dos2unix src/UnixCodeModifier.cpp
-PATCH_FILE="mockcpp_support_arm64.patch"
-dos2unix $PATCH_FILE
-# 检查补丁是否能应用
-if git apply --check "$PATCH_FILE" 2>/dev/null; then
-    echo "Applying patch $PATCH_FILE..."
-    git apply "$PATCH_FILE"
-else
-    echo "Patch $PATCH_FILE already applied or cannot be applied, skipping."
-fi
- 
 cd ${code_dir}/test
 
 cmake -S . -B ${build_dir}
@@ -60,24 +47,27 @@ if ! has_cmd lcov || ! has_cmd genhtml; then
     exit 0
 fi
 
+LCOV_IGNORE_ERRORS=inconsistent,deprecated,mismatch,unused,corrupt,negative
+
 # 1. 收集覆盖率（忽略所有错误）
 lcov -c -d . -o test.info \
     --rc branch_coverage=1 \
     --rc geninfo_unexecuted_blocks=1 \
-    --ignore-errors inconsistent,deprecated,mismatch,unused,corrupt
+    --ignore-errors ${LCOV_IGNORE_ERRORS}
 
 # 2. 只保留 src 目录代码
 lcov -e test.info "*/src/*" -o coverage.info \
     --rc branch_coverage=1 \
-    --ignore-errors unused
+    --ignore-errors ${LCOV_IGNORE_ERRORS}
 
 # 3. 移除头文件
 lcov --remove coverage.info "*/src/*.h" -o coverage.info \
     --rc branch_coverage=1 \
-    --ignore-errors unused
+    --ignore-errors ${LCOV_IGNORE_ERRORS}
 
 # 4. 生成报告
 genhtml coverage.info -o gcovr_report \
     --branch-coverage \
     --show-details \
-    --legend
+    --legend \
+    --ignore-errors ${LCOV_IGNORE_ERRORS}

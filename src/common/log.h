@@ -1,12 +1,18 @@
+/*
+* Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
+*/
+
+#ifndef LOG_H
+#define LOG_H
+#include <unistd.h>
+#include <atomic>
 #include <chrono>
+#include <cstring>
 #include <ctime>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <thread>
-#include <atomic>
-#include <cstring>
-#include <unistd.h>
 
 // 日志等级枚举
 enum class LogLevel {
@@ -51,7 +57,8 @@ inline LogLevel GetLogMinLevel()
     return log_min_level.load(std::memory_order_relaxed);
 }
 
-inline bool IsLogLevelEnable(LogLevel level) {
+inline bool IsLogLevelEnable(LogLevel level)
+{
     return static_cast<int>(level) >= static_cast<int>(GetLogMinLevel());
 }
 
@@ -132,7 +139,8 @@ public:
     // 析构函数：自动拼接所有信息并输出
     ~LogStream()
     {
-        if (!IsLogLevelEnable(level_)) return;
+        if (!IsLogLevelEnable(level_))
+            return;
         // 拼接日志头部（时间、进程、线程、等级、文件、行号、函数）
         std::string header = "[" + GetCurrentTime() + "][" + LogLevelToString(level_) + "][" + GetPid() + "][" +
                              GetTid() + "][" + func_ + ":" + std::to_string(line_) + "] ";
@@ -149,7 +157,8 @@ public:
     // 重载uint8_t，
     LogStream &operator<<(uint8_t value)
     {
-        if (!IsLogLevelEnable(level_)) return *this;
+        if (!IsLogLevelEnable(level_))
+            return *this;
         ss_ << static_cast<uint32_t>(value);
         return *this;
     }
@@ -157,7 +166,8 @@ public:
     // 重载int8_t，
     LogStream &operator<<(int8_t value)
     {
-        if (!IsLogLevelEnable(level_)) return *this;
+        if (!IsLogLevelEnable(level_))
+            return *this;
         ss_ << static_cast<int32_t>(value);
         return *this;
     }
@@ -166,7 +176,8 @@ public:
     template <typename T>
     LogStream &operator<<(const T &value)
     {
-        if (!IsLogLevelEnable(level_)) return *this;
+        if (!IsLogLevelEnable(level_))
+            return *this;
         ss_ << value;
         return *this;
     }
@@ -174,7 +185,8 @@ public:
     // 兼容std::endl等操纵符
     LogStream &operator<<(std::ostream &(*manip)(std::ostream &))
     {
-        if (!IsLogLevelEnable(level_)) return *this;
+        if (!IsLogLevelEnable(level_))
+            return *this;
         manip(ss_);
         return *this;
     }
@@ -197,3 +209,5 @@ private:
 #define LOG_WARN LOG(LogLevel::WARN)
 #define LOG_ERROR LOG(LogLevel::ERROR)
 #define LOG_FATAL LOG(LogLevel::FATAL)
+
+#endif

@@ -15,9 +15,9 @@
 #include <vector>
 #include "MPSCRingBuffer.h"
 #include "ThreadPool.h"
+#include "ub_atomic_log_print.h"
 #include "ub_comm_errno.h"
 #include "ub_dist_comm_queue.h"
-#include "ub_atomic_log_print.h"
 
 namespace ub_comm_queue {
 
@@ -45,6 +45,8 @@ struct alignas(CACHELINE_SIZE) NodeBoardInfo {
     std::atomic<bool> initialized;
     // 存储相对于 ring_region_ptr 的偏移量 (UINT64_MAX 表示无效)
     std::atomic<uint64_t> ring_offsets[MAX_PRIORITY_LEVELS];
+    std::atomic<uint64_t> consumer_heartbeat_seq;
+    std::atomic<uint32_t> heartbeat_interval_ms;
     // dummy 写cache_probe_pad， 用于强制更新结构体
     volatile uint64_t cache_probe_pad;
 };
@@ -108,10 +110,10 @@ public:
     int recv(void *buffer, size_t capacity);
     int get_status(uint8_t node_id, uint8_t priority, ub_comm_queue_status_t *status);
     int set_congestion_threshold(uint8_t priority, uint32_t congestion_threshold_percent);
+    int config_heartbeat(const ub_comm_queue_heartbeat_config_t *request, ub_comm_queue_heartbeat_config_t *effective);
 
     void remove_node_cache(uint32_t node_id);
     void update_cached_congestion_threshold(uint32_t node_id, uint8_t priority, uint32_t threshold, uint64_t version);
-
 
     // 锁实例相关
     bool get_is_for_lock() const;
@@ -154,6 +156,11 @@ private:
 
     // 11. 启动分发线程
     void start_dispatcher();
+    void start_reliability_threads();
+    void stop_reliability_threads();
+    void run_consumer_heartbeat_loop();
+    void run_producer_heartbeat_monitor();
+    void refresh_local_consumer_heartbeat();
 
     // 获取远程环 (包含 ID 映射查找)
     int get_remote_ring(uint32_t node_id, uint32_t priority, MPSCRingBuffer **out_ring);
@@ -172,7 +179,6 @@ private:
     // 去初始化：伪造满 -> 清公告牌 -> 广播删除消息 -> 删缓存
     void deinit_and_broadcast();
     void broadcast_flow_config_update(uint8_t priority, uint32_t threshold, uint64_t version);
-
 
 private:
     uint64_t instance_id_;
@@ -224,8 +230,19 @@ private:
 
     // 专用的分发线程
     std::thread dispatcher_thread_;
+    std::thread consumer_heartbeat_thread_;
+    std::thread producer_heartbeat_thread_;
     // 停止标志
     std::atomic<bool> stop_flag_;
+    std::atomic<bool> reliability_stop_flag_;
+    std::array<std::atomic<bool>, MAX_NODES_LIMIT> peer_alive_;
+    std::array<std::atomic<uint64_t>, MAX_NODES_LIMIT> peer_heartbeat_seq_;
+    std::array<std::atomic<uint64_t>, MAX_NODES_LIMIT> peer_heartbeat_seen_us_;
+    std::array<std::atomic<uint64_t>, MAX_NODES_LIMIT> peer_heartbeat_timeout_us_;
+    std::atomic<uint64_t> local_consumer_heartbeat_seq_;
+    std::atomic<uint64_t> heartbeat_interval_us_;
+    std::atomic<uint64_t> heartbeat_check_interval_us_;
+    std::atomic<uint64_t> heartbeat_timeout_us_;
     uint32_t max_msg_size_global_;
     // 是否为锁实例
     bool is_for_lock;
