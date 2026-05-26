@@ -57,8 +57,9 @@ inline bool ThreadPool::waitForTask(std::unique_lock<std::mutex> &lock)
 inline bool ThreadPool::tryDequeueTask(std::function<void()> &task)
 {
     std::unique_lock<std::mutex> lock(mtx_);
-    if (taskQueue_.empty() && !waitForTask(lock))
+    if (taskQueue_.empty() && !waitForTask(lock)) {
         return false;
+    }
     task = std::move(taskQueue_.front());
     taskQueue_.pop();
     return true;
@@ -81,8 +82,9 @@ inline void ThreadPool::runWorkerLoop()
     // Phase 1: Normal operation — process tasks until shutdown signal
     while (!shuttingDown_.load(std::memory_order_acquire)) {
         std::function<void()> task;
-        if (!tryDequeueTask(task))
+        if (!tryDequeueTask(task)) {
             break;
+        }
         task();
     }
 

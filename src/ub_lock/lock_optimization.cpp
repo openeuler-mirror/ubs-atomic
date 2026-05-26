@@ -130,10 +130,12 @@ void LocalLock::wake_after_unlock_exclusive()
         bool meet_sx = false;
         while (true) {
             ub_lock_mode_t m;
-            if (!peek_head_waiting_mode_clean(m))
+            if (!peek_head_waiting_mode_clean(m)) {
                 return;
-            if (m == UB_LOCK_X)
+            }
+            if (m == UB_LOCK_X) {
                 return;
+            }
             if (m == UB_LOCK_S) {
                 dequeue_and_notify_one();
                 continue;
@@ -151,10 +153,12 @@ void LocalLock::wake_after_unlock_exclusive()
         dequeue_and_notify_one();
         while (true) {
             ub_lock_mode_t m;
-            if (!peek_head_waiting_mode_clean(m))
+            if (!peek_head_waiting_mode_clean(m)) {
                 return;
-            if (m == UB_LOCK_X || m == UB_LOCK_SX)
+            }
+            if (m == UB_LOCK_X || m == UB_LOCK_SX) {
                 return;
+            }
             if (m == UB_LOCK_S) {
                 dequeue_and_notify_one();
                 continue;
@@ -202,8 +206,9 @@ ub_lock_result_t LocalLock::lock_s(int32_t tid, steady_time_point deadline)
                 }
                 continue;
             }
-            if ((i & 0xF) == 0)
+            if ((i & 0xF) == 0) {
                 cpu_relax();
+            }
         }
         // 排队阶段
         {
@@ -270,8 +275,9 @@ ub_lock_result_t LocalLock::lock_x(bool allow_recursive, int32_t tid, steady_tim
                 }
                 continue;
             }
-            if ((i & 0xF) == 0)
+            if ((i & 0xF) == 0) {
                 cpu_relax();
+            }
         }
         {
             local_wait_ctx_t ctx;
@@ -341,8 +347,9 @@ ub_lock_result_t LocalLock::lock_sx(bool allow_recursive, int32_t tid, steady_ti
                 }
                 continue;
             }
-            if ((i & 0xF) == 0)
+            if ((i & 0xF) == 0) {
                 cpu_relax();
+            }
         }
         {
             local_wait_ctx_t ctx;

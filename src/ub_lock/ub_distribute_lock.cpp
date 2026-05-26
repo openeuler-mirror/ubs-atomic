@@ -460,10 +460,12 @@ void DistributedLock::wake_s_chain(const ub_location_t &location)
     bool meet_sx = false;
     while (true) {
         ub_lock_mode_t m;
-        if (!peek_head_waiting_mode_clean(m))
+        if (!peek_head_waiting_mode_clean(m)) {
             return;
-        if (m == UB_LOCK_X)
+        }
+        if (m == UB_LOCK_X) {
             return;
+        }
         if (m == UB_LOCK_S) {
             dequeue_and_notify_one(location);
             continue;
@@ -482,10 +484,12 @@ void DistributedLock::wake_sx_chain(const ub_location_t &location)
     dequeue_and_notify_one(location);
     while (true) {
         ub_lock_mode_t m;
-        if (!peek_head_waiting_mode_clean(m))
+        if (!peek_head_waiting_mode_clean(m)) {
             return;
-        if (m == UB_LOCK_X || m == UB_LOCK_SX)
+        }
+        if (m == UB_LOCK_X || m == UB_LOCK_SX) {
             return;
+        }
         if (m == UB_LOCK_S) {
             dequeue_and_notify_one(location);
             continue;
@@ -690,8 +694,9 @@ ub_lock_result_t DistributedLock::spin_wait_s_loop(const ub_location_t &location
                 }
                 continue;
             }
-            if ((i & 0xF) == 0)
+            if ((i & 0xF) == 0) {
                 cpu_relax();
+            }
         }
 
         local_wait_ctx_t ctx;
@@ -797,7 +802,6 @@ ub_lock_result_t DistributedLock::unlock_s(const ub_lock_policy_t &policy, const
     bool can_delay = policy.allow_delay_release && (rw_lock_shm_->waiting_count.load(std::memory_order_acquire) == 0) &&
                      (local_lock->waiting_count.load(std::memory_order_acquire) == 0);
     const bool use_delay = can_delay && try_claim_delayed_owner(rw_lock_shm_->reserve_lock_owner, identify);
-
     if (!use_delay) {
         local_lock->local_is_reserve_lock.store(UB_LOCK_I, std::memory_order_release);
         const int32_t old = rw_lock_shm_->lock_word.fetch_add(1, std::memory_order_acq_rel);
@@ -829,7 +833,6 @@ ub_lock_result_t DistributedLock::spin_wait_x_loop(const ub_location_t &location
     uint32_t slot = 0;
     bool is_awakened = false;
     uint64_t identify = make_global_owner(location.node_id, location.tid);
-
     while (true) {
         for (uint32_t i = 0; i < SPIN_WAIT_ROUNDS; ++i) {
             if (rw_lock_shm_->waiting_count.load(std::memory_order_acquire) > 0 && !is_awakened) {
@@ -858,8 +861,9 @@ ub_lock_result_t DistributedLock::spin_wait_x_loop(const ub_location_t &location
                 }
                 continue;
             }
-            if ((i & 0xF) == 0)
+            if ((i & 0xF) == 0) {
                 cpu_relax();
+            }
         }
 
         local_wait_ctx_t ctx;
@@ -953,11 +957,9 @@ ub_lock_result_t DistributedLock::unlock_x(const ub_lock_policy_t &policy, const
 
     LocalLock *local_lock = ll_sp.get();
     uint64_t identify = make_global_owner(location.node_id, location.tid);
-
     bool can_delay = policy.allow_delay_release && (rw_lock_shm_->waiting_count.load(std::memory_order_acquire) == 0) &&
                      (local_lock->waiting_count.load(std::memory_order_acquire) == 0);
     const bool use_delay = can_delay && try_claim_delayed_owner(rw_lock_shm_->reserve_lock_owner, identify);
-
     if (!use_delay) {
         uint64_t owner = rw_lock_shm_->lock_owner_x.load(std::memory_order_acquire);
         if (owner != identify) {
@@ -996,7 +998,6 @@ ub_lock_result_t DistributedLock::spin_wait_sx_loop(const ub_location_t &locatio
     uint32_t slot = 0;
     bool is_awakened = false;
     uint64_t identify = make_global_owner(location.node_id, location.tid);
-
     while (true) {
         for (uint32_t i = 0; i < SPIN_WAIT_ROUNDS; ++i) {
             if (rw_lock_shm_->waiting_count.load(std::memory_order_acquire) > 0 && !is_awakened) {
@@ -1028,8 +1029,9 @@ ub_lock_result_t DistributedLock::spin_wait_sx_loop(const ub_location_t &locatio
                 }
                 continue;
             }
-            if ((i & 0xF) == 0)
+            if ((i & 0xF) == 0) {
                 cpu_relax();
+            }
         }
 
         local_wait_ctx_t ctx;
@@ -1123,7 +1125,6 @@ ub_lock_result_t DistributedLock::unlock_sx(const ub_lock_policy_t &policy, cons
 
     LocalLock *local_lock = ll_sp.get();
     uint64_t identify = make_global_owner(location.node_id, location.tid);
-
     bool can_delay = policy.allow_delay_release && (rw_lock_shm_->waiting_count.load(std::memory_order_acquire) == 0) &&
                      (local_lock->waiting_count.load(std::memory_order_acquire) == 0);
     const bool use_delay = can_delay && try_claim_delayed_owner(rw_lock_shm_->reserve_lock_owner, identify);
@@ -1447,8 +1448,9 @@ void DistributedLock::recover_shared_lock(uint32_t process_id)
         int32_t old = rw_lock_shm_->lock_word.load(std::memory_order_acquire);
         while (true) {
             const uint32_t expected_now = expected_shared_owner_count(old);
-            if (expected_now <= actual)
+            if (expected_now <= actual) {
                 return;
+            }
             const int32_t next = old + static_cast<int32_t>(expected_now - actual);
             if (rw_lock_shm_->lock_word.compare_exchange_weak(old, next, std::memory_order_acq_rel,
                                                               std::memory_order_acquire)) {
@@ -1546,9 +1548,7 @@ ub_lock_result_t DistributedLock::recover(const uint32_t process_id, const ub_lo
         ATOMIC_LOG(LOG_LEVEL_WARN, "invalid process_id=%d, valid range [0, %d).", process_id, UB_MAX_NODES);
         return UB_LOCK_ERROR;
     }
-
     int32_t cur = rw_lock_shm_->lock_word.load(std::memory_order_acquire);
-
     if (cur == 0) {
         recover_exclusive_x(process_id);
     } else if (cur == X_LOCK_HALF_DECR) {

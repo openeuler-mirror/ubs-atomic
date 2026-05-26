@@ -2,7 +2,7 @@
 * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 */
 
-#ifndef LOG_H 
+#ifndef LOG_H
 #define LOG_H
 #include <unistd.h>
 #include <atomic>
@@ -210,4 +210,4 @@ private:
 #define LOG_ERROR LOG(LogLevel::ERROR)
 #define LOG_FATAL LOG(LogLevel::FATAL)
 
-#endif 
+#endif
