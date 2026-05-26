@@ -58,7 +58,7 @@ TEST_F(DistTxResTest, DistTxResBasicTest)
     status = ub_dist_tx_res_fetch_add(tid_addr, 1, &value);
     EXPECT_TRUE(status == UB_RES_ERROR);
 
-    tid_addr = reinterpret_cast<uint64_t*>(0x7ffee3b5a001);
+    tid_addr = reinterpret_cast<uint64_t *>(0x7ffee3b5a001);
     status = ub_dist_tx_res_init(tid_addr);
     EXPECT_TRUE(status == UB_RES_ERROR);
 

@@ -60,8 +60,7 @@ void SpinLock::lock_init()
             return;
         }
 
-        if (state == SPIN_INIT_EMPTY ||
-            (state != SPIN_INITING && state != SPIN_READY)) {
+        if (state == SPIN_INIT_EMPTY || (state != SPIN_INITING && state != SPIN_READY)) {
             int32_t expected = state;
             if (lock_shm_->init_state.compare_exchange_strong(expected, SPIN_INITING, std::memory_order_acq_rel,
                                                               std::memory_order_acquire)) {

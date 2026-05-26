@@ -78,7 +78,8 @@ private:
     message_t *create_message(const ub_location_t &location, uint8_t node_id, const local_msg_body_t &msg_body);
 
     // 锁优化（本地锁降级+延迟释放）
-    ub_lock_result_t delay_release_local_lock(LocalLock &local_lock, ub_lock_mode_t mode, const ub_location_t &location);
+    ub_lock_result_t delay_release_local_lock(LocalLock &local_lock, ub_lock_mode_t mode,
+                                              const ub_location_t &location);
     ub_lock_result_t delay_release_ub_lock(ub_lock_mode_t mode, LocalLock &local_lock, const ub_location_t &location);
 
     void wake_s_chain(const ub_location_t &location);
@@ -87,9 +88,12 @@ private:
     void dump_timeout_holder_info(const ub_location_t &location, ub_lock_mode_t request_mode, LocalLock *local_lock,
                                   const char *reason);
     bool wait_follower_s(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline);
-    ub_lock_result_t spin_wait_s_loop(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline);
-    ub_lock_result_t spin_wait_x_loop(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline, bool is_recursive);
-    ub_lock_result_t spin_wait_sx_loop(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline, bool is_recursive);
+    ub_lock_result_t spin_wait_s_loop(const ub_location_t &location, LocalLock *local_lock,
+                                      const steady_time_point &deadline);
+    ub_lock_result_t spin_wait_x_loop(const ub_location_t &location, LocalLock *local_lock,
+                                      const steady_time_point &deadline, bool is_recursive);
+    ub_lock_result_t spin_wait_sx_loop(const ub_location_t &location, LocalLock *local_lock,
+                                       const steady_time_point &deadline, bool is_recursive);
 
     void recover_exclusive_x(uint32_t process_id);
     void recover_exclusive_sx(uint32_t process_id);

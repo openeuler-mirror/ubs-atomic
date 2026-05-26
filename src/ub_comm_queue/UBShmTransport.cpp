@@ -64,8 +64,7 @@ inline void ub_nt_store64(volatile uint64_t *addr, uint64_t val)
 #if defined(__aarch64__) || defined(__arm__)
     asm volatile("stlr %0, [%1]" ::"r"(val), "r"(addr) : "memory");
 #else
-    reinterpret_cast<std::atomic<uint64_t> *>(const_cast<uint64_t *>(addr))
-        ->store(val, std::memory_order_release);
+    reinterpret_cast<std::atomic<uint64_t> *>(const_cast<uint64_t *>(addr))->store(val, std::memory_order_release);
 #endif
 }
 
@@ -117,7 +116,7 @@ static uint64_t generate_instance_id()
 
 static uint64_t steady_time_us()
 {
-    struct timespec ts {};
+    struct timespec ts{};
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
@@ -129,9 +128,6 @@ struct FlowConfigUpdateMessage {
 };
 static_assert(sizeof(FlowConfigUpdateMessage) <= LOCK_RING_MSG_SIZE - sizeof(message_header_t),
               "Flow config update body is too large for lock ring");
-
-
-
 
 void on_flow_config_update(const message_t *msg, void *ctx)
 {
@@ -173,7 +169,6 @@ void UBShmTransport::remove_node_cache(uint32_t node_id)
         remote_lookup_table_[idx][p] = nullptr;
     }
 }
-
 
 void UBShmTransport::update_cached_congestion_threshold(uint32_t node_id, uint8_t priority, uint32_t threshold,
                                                         uint64_t version)
@@ -805,17 +800,15 @@ void UBShmTransport::run_producer_heartbeat_monitor()
             }
 
             uint64_t heartbeat_seq = board->nodes[idx].consumer_heartbeat_seq.load(std::memory_order_acquire);
-            uint32_t remote_interval_ms =
-                board->nodes[idx].heartbeat_interval_ms.load(std::memory_order_acquire);
+            uint32_t remote_interval_ms = board->nodes[idx].heartbeat_interval_ms.load(std::memory_order_acquire);
             if (remote_interval_ms == 0) {
                 remote_interval_ms = DEFAULT_HEARTBEAT_INTERVAL_MS;
             }
             uint64_t local_timeout_us = heartbeat_timeout_us_.load(std::memory_order_relaxed);
             uint64_t check_interval_us = heartbeat_check_interval_us_.load(std::memory_order_relaxed);
-            uint64_t effective_timeout_us =
-                std::max<uint64_t>(local_timeout_us,
-                                   std::max<uint64_t>(static_cast<uint64_t>(remote_interval_ms) * 3ULL * US_PER_MS,
-                                                      check_interval_us * 2ULL));
+            uint64_t effective_timeout_us = std::max<uint64_t>(
+                local_timeout_us, std::max<uint64_t>(static_cast<uint64_t>(remote_interval_ms) * 3ULL * US_PER_MS,
+                                                     check_interval_us * 2ULL));
             peer_heartbeat_timeout_us_[node_id].store(effective_timeout_us, std::memory_order_relaxed);
 
             bool alive = false;
@@ -834,9 +827,8 @@ void UBShmTransport::run_producer_heartbeat_monitor()
                 ATOMIC_LOG(LOG_LEVEL_WARN,
                            "Consumer heartbeat timeout, node=%u heartbeat_seq=%llu last_seen_us=%llu now_us=%llu "
                            "effective_timeout_us=%llu remote_interval_ms=%u",
-                           node_id, heartbeat_seq,
-                           peer_heartbeat_seen_us_[node_id].load(std::memory_order_relaxed), now,
-                           effective_timeout_us, remote_interval_ms);
+                           node_id, heartbeat_seq, peer_heartbeat_seen_us_[node_id].load(std::memory_order_relaxed),
+                           now, effective_timeout_us, remote_interval_ms);
             }
         }
         uint64_t interval_us = heartbeat_check_interval_us_.load(std::memory_order_relaxed);
@@ -962,7 +954,8 @@ int UBShmTransport::send(const message_t *msg)
         return -EINVAL;
     }
     if (__builtin_expect(dest_id != conf_.current_node_id && dest_id < MAX_NODES_LIMIT &&
-                         !peer_alive_[dest_id].load(std::memory_order_acquire), 0)) {
+                             !peer_alive_[dest_id].load(std::memory_order_acquire),
+                         0)) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: destination consumer heartbeat timeout, node=%u", dest_id);
         return UB_COMM_ERR_PEER_NOT_READY;
     }
@@ -1195,19 +1188,16 @@ int UBShmTransport::get_status(uint8_t node_id, uint8_t priority, ub_comm_queue_
 
 int UBShmTransport::set_congestion_threshold(uint8_t priority, uint32_t congestion_threshold_percent)
 {
-    if (priority == LOCK_RING_PRIORITY || priority >= MAX_PRIORITY_LEVELS)
-    {
+    if (priority == LOCK_RING_PRIORITY || priority >= MAX_PRIORITY_LEVELS) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid priority %u", priority);
         return -EINVAL;
     }
     MPSCRingBuffer *ring = local_rings_[priority];
-    if (ring == nullptr)
-    {
+    if (ring == nullptr) {
         return UB_COMM_ERR_RING_NOT_FOUND;
     }
     int ret = ring->configure_congestion_threshold(congestion_threshold_percent);
-    if (ret != UB_COMM_OK)
-    {
+    if (ret != UB_COMM_OK) {
         return ret;
     }
 
@@ -1218,22 +1208,16 @@ int UBShmTransport::set_congestion_threshold(uint8_t priority, uint32_t congesti
 int UBShmTransport::config_heartbeat(const ub_comm_queue_heartbeat_config_t *request,
                                      ub_comm_queue_heartbeat_config_t *effective)
 {
-    if (request == nullptr && effective == nullptr)
-    {
+    if (request == nullptr && effective == nullptr) {
         return -EINVAL;
     }
-    if (request != nullptr)
-    {
-        if (
-            request->heartbeat_interval_ms == 0 || request->check_interval_ms == 0 ||
-            request->timeout_ms == 0)
-        {
+    if (request != nullptr) {
+        if (request->heartbeat_interval_ms == 0 || request->check_interval_ms == 0 || request->timeout_ms == 0) {
             return -EINVAL;
         }
 
         uint64_t min_timeout_ms = static_cast<uint64_t>(request->check_interval_ms) * 2ULL;
-        if (static_cast<uint64_t>(request->timeout_ms) < min_timeout_ms)
-        {
+        if (static_cast<uint64_t>(request->timeout_ms) < min_timeout_ms) {
             return -EINVAL;
         }
 
@@ -1241,21 +1225,18 @@ int UBShmTransport::config_heartbeat(const ub_comm_queue_heartbeat_config_t *req
                                      std::memory_order_release);
         heartbeat_check_interval_us_.store(static_cast<uint64_t>(request->check_interval_ms) * US_PER_MS,
                                            std::memory_order_release);
-        heartbeat_timeout_us_.store(static_cast<uint64_t>(request->timeout_ms) * US_PER_MS,
-                                    std::memory_order_release);
+        heartbeat_timeout_us_.store(static_cast<uint64_t>(request->timeout_ms) * US_PER_MS, std::memory_order_release);
         int32_t my_idx = get_compact_index(conf_.current_node_id);
         if (init_region_ptr_ != nullptr && my_idx >= 0) {
             Billboard *board = reinterpret_cast<Billboard *>(init_region_ptr_);
-            board->nodes[my_idx].heartbeat_interval_ms.store(request->heartbeat_interval_ms,
-                                                             std::memory_order_release);
+            board->nodes[my_idx].heartbeat_interval_ms.store(request->heartbeat_interval_ms, std::memory_order_release);
         }
         ATOMIC_LOG(LOG_LEVEL_INFO,
                    "Updated heartbeat config, heartbeat_interval_ms=%u check_interval_ms=%u timeout_ms=%u",
                    request->heartbeat_interval_ms, request->check_interval_ms, request->timeout_ms);
     }
 
-    if (effective != nullptr)
-    {
+    if (effective != nullptr) {
         effective->heartbeat_interval_ms =
             static_cast<uint32_t>(heartbeat_interval_us_.load(std::memory_order_acquire) / US_PER_MS);
         effective->check_interval_ms =

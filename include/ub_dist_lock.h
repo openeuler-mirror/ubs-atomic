@@ -82,7 +82,7 @@ typedef struct {
 typedef struct {
     const ub_lock_query_result_t *query_results; /* one result per queried node */
     uint32_t query_result_count;                 /* number of elements in query_results */
-} ub_lock_rebuild_info_t;                      /* Aggregated cluster result for rebuild */
+} ub_lock_rebuild_info_t;                        /* Aggregated cluster result for rebuild */
 
 /* ============================================================
  * C ABI APIs

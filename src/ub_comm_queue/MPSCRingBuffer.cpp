@@ -5,8 +5,8 @@
 #include "MPSCRingBuffer.h"
 #include <cerrno>
 #include <cstdint>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 
@@ -29,7 +29,7 @@ static constexpr uint32_t LOCAL_STALE_STATE_SLOTS = 32;
 
 struct MPSCRingBuffer::Entry {
     std::atomic<uint64_t> ready_seq; // readable only when ready_seq == head + 1
-    uint8_t data[];                // Flexible array member
+    uint8_t data[];                  // Flexible array member
 };
 
 struct LocalStaleReservationState {
@@ -102,7 +102,7 @@ MPSCRingBuffer::MPSCRingBuffer(uint8_t *buffer_start, uint32_t capacity, uint32_
 #endif
 {
     if (capacity == 0 || (capacity & (capacity - 1)) != 0) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR ,"Invalid ring buffer capacity,  must be a power of 2");
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid ring buffer capacity,  must be a power of 2");
         abort();
     }
     index_mask_ = entry_num_ - 1;
@@ -129,14 +129,14 @@ MPSCRingBuffer::MPSCRingBuffer(uint8_t *buffer_start, uint32_t capacity, uint32_
 
 static uint64_t now_us()
 {
-    struct timespec ts {};
+    struct timespec ts{};
     clock_gettime(CLOCK_REALTIME, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
 
 static uint64_t steady_us()
 {
-    struct timespec ts {};
+    struct timespec ts{};
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
@@ -160,9 +160,8 @@ void MPSCRingBuffer::record_depth(uint64_t used)
 {
     uint64_t old = max_depth_.load(std::memory_order_relaxed);
     // Monotonic best-effort peak tracking: losing this race only means another producer recorded a newer value.
-    while (used > old && !max_depth_.compare_exchange_weak(old, used, std::memory_order_relaxed,
-                                                           std::memory_order_relaxed)) {
-    }
+    while (used > old &&
+           !max_depth_.compare_exchange_weak(old, used, std::memory_order_relaxed, std::memory_order_relaxed)) {}
 }
 
 void MPSCRingBuffer::record_full_fail()
@@ -215,8 +214,7 @@ int MPSCRingBuffer::sample_flow_state(uint64_t used, const char *event)
             return UB_COMM_SEND_CONGESTED;
         }
         uint8_t expected = 0;
-        if (congested_.compare_exchange_strong(expected, 1, std::memory_order_acq_rel,
-                                               std::memory_order_relaxed)) {
+        if (congested_.compare_exchange_strong(expected, 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
             uint64_t ts = now_us();
 #ifdef UB_COMM_QUEUE_ENABLE_DEBUG_STATS
             congestion_enter_ts_us_.store(ts, std::memory_order_relaxed);
@@ -231,8 +229,7 @@ int MPSCRingBuffer::sample_flow_state(uint64_t used, const char *event)
     }
 
     uint8_t expected = 1;
-    if (congested_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel,
-                                           std::memory_order_relaxed)) {
+    if (congested_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel, std::memory_order_relaxed)) {
         uint64_t ts = now_us();
 #ifdef UB_COMM_QUEUE_ENABLE_DEBUG_STATS
         congestion_exit_ts_us_.store(ts, std::memory_order_relaxed);
@@ -292,13 +289,12 @@ bool MPSCRingBuffer::try_skip_stale_reserved_entry(Entry *entry, uint64_t cur_he
     if (congested_.load(std::memory_order_acquire) != 0) {
         (void)sample_flow_state(approximate_used(), "skip_stale_reserved");
     }
-    ATOMIC_LOG(LOG_LEVEL_WARN, "Skipped stale reserved ring entry, ring=%p, head=%llu, timeout_us=%llu",
-               (void *)this, cur_head, HALF_WRITE_TIMEOUT_US);
+    ATOMIC_LOG(LOG_LEVEL_WARN, "Skipped stale reserved ring entry, ring=%p, head=%llu, timeout_us=%llu", (void *)this,
+               cur_head, HALF_WRITE_TIMEOUT_US);
     return true;
 }
 
-int MPSCRingBuffer::flow_result_after_enqueue(uint64_t new_tail, std::atomic<uint64_t> &cached_head,
-                                              const char *event)
+int MPSCRingBuffer::flow_result_after_enqueue(uint64_t new_tail, std::atomic<uint64_t> &cached_head, const char *event)
 {
     const uint32_t threshold = get_flow_threshold();
     uint64_t cached = cached_head.load(std::memory_order_relaxed);
@@ -331,12 +327,12 @@ uint32_t MPSCRingBuffer::refresh_cached_threshold(std::atomic<uint32_t> &cached_
 
 int MPSCRingBuffer::flow_result_after_enqueue_cached(uint64_t new_tail, std::atomic<uint64_t> &cached_head,
                                                      std::atomic<uint32_t> &cached_threshold,
-                                                     std::atomic<uint64_t> &cached_threshold_version,
-                                                     const char *event)
+                                                     std::atomic<uint64_t> &cached_threshold_version, const char *event)
 {
     uint32_t threshold = cached_threshold.load(std::memory_order_relaxed);
     if (__builtin_expect(cached_threshold_version.load(std::memory_order_relaxed) == 0 ||
-                         (new_tail & (FLOW_CONFIG_REFRESH_INTERVAL - 1)) == 0, 0)) {
+                             (new_tail & (FLOW_CONFIG_REFRESH_INTERVAL - 1)) == 0,
+                         0)) {
         threshold = refresh_cached_threshold(cached_threshold, cached_threshold_version);
     }
 
@@ -472,10 +468,9 @@ int MPSCRingBuffer::enqueue_local(const void *hdr, const void *body, uint32_t bo
 // [场景 B] 远端入队 (NC 模式)
 // ===========================================================================
 int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr, const void *body, uint32_t body_len,
-                                    uint64_t mask, uint64_t stride, uint64_t max_size,
-                                    std::atomic<uint64_t> &shadow_head,
-                                    std::atomic<uint32_t> &cached_threshold,
-                                    std::atomic<uint64_t> &cached_threshold_version)
+                                   uint64_t mask, uint64_t stride, uint64_t max_size,
+                                   std::atomic<uint64_t> &shadow_head, std::atomic<uint32_t> &cached_threshold,
+                                   std::atomic<uint64_t> &cached_threshold_version)
 {
     // 0. [Local] 参数检查
     uint32_t total_len = MSG_HEADER_LEN + body_len;
@@ -540,8 +535,7 @@ int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr,
     if (body_len > 0) {
         std::memcpy(entry->data, hdr, MSG_HEADER_LEN);
         std::memcpy(entry->data + MSG_HEADER_LEN, body, body_len);
-    }
-    else {
+    } else {
         std::memcpy(entry->data, hdr, MSG_HEADER_LEN);
     }
 

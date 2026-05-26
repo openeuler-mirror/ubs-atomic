@@ -87,24 +87,24 @@ typedef enum {
 } ub_func_type_t;     /* callback type*/
 
 typedef enum {
-    UB_COMM_QUEUE_IDLE = 0,    /* used == 0 */
-    UB_COMM_QUEUE_NORMAL,      /* 0 < used < congestion threshold */
-    UB_COMM_QUEUE_CONGESTED,   /* used >= congestion threshold and used < total */
-    UB_COMM_QUEUE_FULL         /* used >= total */
+    UB_COMM_QUEUE_IDLE = 0,  /* used == 0 */
+    UB_COMM_QUEUE_NORMAL,    /* 0 < used < congestion threshold */
+    UB_COMM_QUEUE_CONGESTED, /* used >= congestion threshold and used < total */
+    UB_COMM_QUEUE_FULL       /* used >= total */
 } ub_comm_queue_state_t;
 
 typedef struct {
-    uint64_t used;                      /* estimated number of occupied entries */
-    uint64_t total;                     /* ring capacity */
-    uint64_t free;                      /* estimated free entries */
-    ub_comm_queue_state_t state;        /* derived queue state */
-    uint64_t congestion_threshold;      /* entry count corresponding to configured watermark */
-    uint64_t max_depth;                 /* maximum used depth since ring initialization */
+    uint64_t used;                 /* estimated number of occupied entries */
+    uint64_t total;                /* ring capacity */
+    uint64_t free;                 /* estimated free entries */
+    ub_comm_queue_state_t state;   /* derived queue state */
+    uint64_t congestion_threshold; /* entry count corresponding to configured watermark */
+    uint64_t max_depth;            /* maximum used depth since ring initialization */
 #ifdef UB_COMM_QUEUE_ENABLE_DEBUG_STATS
-    uint64_t full_fail_count;           /* failed sends because the ring was full */
-    uint64_t cas_fail_count;            /* producer CAS reservation failures */
-    uint64_t congestion_enter_ts_us;    /* last congestion-enter timestamp, CLOCK_REALTIME us */
-    uint64_t congestion_exit_ts_us;     /* last congestion-exit timestamp, CLOCK_REALTIME us */
+    uint64_t full_fail_count;        /* failed sends because the ring was full */
+    uint64_t cas_fail_count;         /* producer CAS reservation failures */
+    uint64_t congestion_enter_ts_us; /* last congestion-enter timestamp, CLOCK_REALTIME us */
+    uint64_t congestion_exit_ts_us;  /* last congestion-exit timestamp, CLOCK_REALTIME us */
 #endif
 } ub_comm_queue_status_t;
 
@@ -149,8 +149,7 @@ int ub_comm_queue_send(ub_shm_comm_t *handle, const message_t *msg);
  * @param status [out]  : ring status snapshot
  * @return 0 on success, negative error code on failure
  */
-int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t priority,
-                             ub_comm_queue_status_t *status);
+int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t priority, ub_comm_queue_status_t *status);
 
 /*
  * @brief Configure local ring congestion threshold.
@@ -179,8 +178,7 @@ int ub_comm_queue_set_congestion_threshold(ub_shm_comm_t *handle, uint8_t priori
  * @param effective [out]: effective configuration after applying request, or NULL if not needed
  * @return 0 on success, negative error code on failure
  */
-int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle,
-                                   const ub_comm_queue_heartbeat_config_t *request,
+int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle, const ub_comm_queue_heartbeat_config_t *request,
                                    ub_comm_queue_heartbeat_config_t *effective);
 
 /*

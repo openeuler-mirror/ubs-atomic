@@ -1,7 +1,7 @@
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <chrono>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -253,18 +253,18 @@ TEST(MPSCRingBufferTest, EnqueueRemoteEmptyBodyAndFullPaths)
     std::atomic<uint64_t> cachedThresholdVersion{0};
     message_header_t hdr = MakeHeader(0);
 
-    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
-                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
-                                             cachedThreshold, cachedThresholdVersion),
-              UB_COMM_OK);
-    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
-                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
-                                             cachedThreshold, cachedThresholdVersion),
-              UB_COMM_SEND_CONGESTED);
-    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
-                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
-                                             cachedThreshold, cachedThresholdVersion),
-              UB_COMM_ERR_RING_FULL);
+    EXPECT_EQ(
+        MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1, ring->get_entry_stride(),
+                                       ring->get_max_msg_size(), shadowHead, cachedThreshold, cachedThresholdVersion),
+        UB_COMM_OK);
+    EXPECT_EQ(
+        MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1, ring->get_entry_stride(),
+                                       ring->get_max_msg_size(), shadowHead, cachedThreshold, cachedThresholdVersion),
+        UB_COMM_SEND_CONGESTED);
+    EXPECT_EQ(
+        MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1, ring->get_entry_stride(),
+                                       ring->get_max_msg_size(), shadowHead, cachedThreshold, cachedThresholdVersion),
+        UB_COMM_ERR_RING_FULL);
 
     std::vector<char> out(maxMsgSize);
     EXPECT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t));
@@ -284,10 +284,10 @@ TEST(MPSCRingBufferTest, RemoteCachedThresholdZeroAndRefreshPaths)
     std::atomic<uint64_t> cachedThresholdVersion{ring->get_congestion_threshold_version()};
     message_header_t hdr = MakeHeader(0);
 
-    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
-                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
-                                             cachedThreshold, cachedThresholdVersion),
-              UB_COMM_SEND_CONGESTED);
+    EXPECT_EQ(
+        MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1, ring->get_entry_stride(),
+                                       ring->get_max_msg_size(), shadowHead, cachedThreshold, cachedThresholdVersion),
+        UB_COMM_SEND_CONGESTED);
 
     std::vector<char> out(maxMsgSize);
     ASSERT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t));
@@ -295,10 +295,10 @@ TEST(MPSCRingBufferTest, RemoteCachedThresholdZeroAndRefreshPaths)
     ASSERT_EQ(ring->configure_congestion_threshold(100), UB_COMM_OK);
     cachedThreshold.store(1, std::memory_order_relaxed);
     cachedThresholdVersion.store(0, std::memory_order_relaxed);
-    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1,
-                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
-                                             cachedThreshold, cachedThresholdVersion),
-              UB_COMM_OK);
+    EXPECT_EQ(
+        MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 0, ring->get_entry_num() - 1, ring->get_entry_stride(),
+                                       ring->get_max_msg_size(), shadowHead, cachedThreshold, cachedThresholdVersion),
+        UB_COMM_OK);
     EXPECT_EQ(cachedThreshold.load(std::memory_order_relaxed), ring->get_congestion_threshold());
     EXPECT_EQ(cachedThresholdVersion.load(std::memory_order_relaxed), ring->get_congestion_threshold_version());
 }

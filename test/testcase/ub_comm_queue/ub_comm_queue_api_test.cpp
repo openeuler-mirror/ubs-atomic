@@ -1,5 +1,5 @@
-#include <cerrno>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -20,7 +20,7 @@
 namespace ub_comm_queue {
 namespace ut {
 namespace {
-
+static constexpr uint32_t DEFAULT_NODE_NUM = 2;
 void DummyCallback(const message_t *, void *) {}
 std::atomic<uint32_t> g_async_callback_count{0};
 std::atomic<uint32_t> g_log_callback_count{0};
@@ -134,11 +134,11 @@ public:
         entries_[1].region.ptr = ring_mem1_.get();
         entries_[1].node_id = 1;
         ring_map_.entries = entries_;
-        ring_map_.count = 2;
+        ring_map_.count = DEFAULT_NODE_NUM;
 
-        for (uint8_t node = 0; node < 2; ++node) {
+        for (uint8_t node = 0; node < DEFAULT_NODE_NUM; ++node) {
             confs_[node].cpu_id = -1;
-            confs_[node].max_nodes = 2;
+            confs_[node].max_nodes = DEFAULT_NODE_NUM;
             confs_[node].current_node_id = node;
             confs_[node].num_rings = static_cast<uint8_t>(descs_.size());
             confs_[node].ring_descs = descs_.data();
@@ -203,7 +203,7 @@ bool WaitUntil(std::chrono::milliseconds timeout, const std::function<bool()> &p
 
 uint64_t TestSteadyUs()
 {
-    struct timespec ts {};
+    struct timespec ts{};
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
@@ -259,9 +259,9 @@ TEST(UbCommQueueApiTest, ReservedSystemMessagesAreRejectedByPublicApi)
 
     EXPECT_EQ(ub_comm_queue_register_process_func(&handle, MSG_TYPE_DIST_LOCK, UB_FUNC_SYNC, DummyCallback, nullptr),
               -EOPNOTSUPP);
-    EXPECT_EQ(ub_comm_queue_register_process_func(&handle, MSG_TYPE_SYS_PEER_EXIT, UB_FUNC_SYNC, DummyCallback,
-                                                  nullptr),
-              -EOPNOTSUPP);
+    EXPECT_EQ(
+        ub_comm_queue_register_process_func(&handle, MSG_TYPE_SYS_PEER_EXIT, UB_FUNC_SYNC, DummyCallback, nullptr),
+        -EOPNOTSUPP);
 }
 
 TEST(UbCommQueueApiTest, InitDeinitAndWrapperMethodsUseTransport)
@@ -340,9 +340,9 @@ TEST(UbCommQueueApiTest, TransportRejectsInvalidRuntimeArguments)
     ub_comm_queue_status_t status{};
     EXPECT_EQ(transport->register_func(7, static_cast<ub_func_type_t>(99), DummyCallback, nullptr), -EINVAL);
     EXPECT_EQ(transport->register_func_for_lock(7, UB_FUNC_SYNC, DummyCallback, nullptr), -EINVAL);
-    EXPECT_EQ(transport->register_func_for_lock(MSG_TYPE_DIST_LOCK, static_cast<ub_func_type_t>(99), DummyCallback,
-                                                nullptr),
-              -EINVAL);
+    EXPECT_EQ(
+        transport->register_func_for_lock(MSG_TYPE_DIST_LOCK, static_cast<ub_func_type_t>(99), DummyCallback, nullptr),
+        -EINVAL);
     EXPECT_EQ(transport->get_status(0, 1, nullptr), -EINVAL);
     EXPECT_EQ(transport->get_status(0, MAX_PRIORITY_LEVELS, &status), -EINVAL);
     EXPECT_EQ(transport->set_congestion_threshold(LOCK_RING_PRIORITY, 80), -EINVAL);
@@ -362,9 +362,8 @@ TEST(UbCommQueueApiTest, AsyncCallbackDispatchesThroughThreadPool)
     message_t msg = MakeMessage(8);
     msg.header.body_length = 0;
     ASSERT_EQ(ub_comm_queue_send(&handle, &msg), UB_COMM_OK);
-    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(300), []() {
-        return g_async_callback_count.load(std::memory_order_acquire) == 1;
-    }));
+    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(300),
+                          []() { return g_async_callback_count.load(std::memory_order_acquire) == 1; }));
 
     EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
 }
@@ -458,9 +457,8 @@ TEST(UbCommQueueApiTest, HeartbeatMonitorUsesPeerDeclaredIntervalBeforeTimingOut
     message_t msg = MakeMessage(1, 0, 9);
     msg.header.body_length = 0;
 
-    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(200), [&]() {
-        return ub_comm_queue_send(&node1, &msg) == UB_COMM_ERR_PEER_NOT_READY;
-    }));
+    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(200),
+                          [&]() { return ub_comm_queue_send(&node1, &msg) == UB_COMM_ERR_PEER_NOT_READY; }));
 
     EXPECT_EQ(ub_comm_queue_deinit(&node1), UB_COMM_OK);
     EXPECT_EQ(ub_comm_queue_deinit(&node0), UB_COMM_OK);

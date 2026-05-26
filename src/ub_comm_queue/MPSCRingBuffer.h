@@ -15,10 +15,10 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include "ub_atomic_log_print.h"
 #include "ub_comm_errno.h"
 #include "ub_dist_comm_queue.h"
 #include "util.h"
-#include "ub_atomic_log_print.h"
 
 namespace ub_comm_queue {
 
@@ -52,17 +52,14 @@ public:
      *         负数表示写入失败。
      */
     // 远端用
-    static int enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr, const void *body,
-                               uint32_t body_len,
-                               uint64_t mask,        // 缓存的 entry_num - 1
-                               uint64_t stride,      // 缓存的 entry_stride
-                               uint64_t max_size,    // 缓存的 max_msg_size
-                               std::atomic<uint64_t> &shadow_head, // 缓存的 shadow_head (引用)
-                               std::atomic<uint32_t> &cached_threshold,
-                               std::atomic<uint64_t> &cached_threshold_version
-    );
-    // 本地用  
-    int enqueue_local(const void* hdr, const void* body, uint32_t body_len);
+    static int enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr, const void *body, uint32_t body_len,
+                              uint64_t mask,                      // 缓存的 entry_num - 1
+                              uint64_t stride,                    // 缓存的 entry_stride
+                              uint64_t max_size,                  // 缓存的 max_msg_size
+                              std::atomic<uint64_t> &shadow_head, // 缓存的 shadow_head (引用)
+                              std::atomic<uint32_t> &cached_threshold, std::atomic<uint64_t> &cached_threshold_version);
+    // 本地用
+    int enqueue_local(const void *hdr, const void *body, uint32_t body_len);
 
     /**
      * @brief 出队 (单消费者)
@@ -120,12 +117,10 @@ private:
     int flow_result_after_enqueue(uint64_t new_tail, std::atomic<uint64_t> &cached_head, const char *event);
     int flow_result_after_enqueue_cached(uint64_t new_tail, std::atomic<uint64_t> &cached_head,
                                          std::atomic<uint32_t> &cached_threshold,
-                                         std::atomic<uint64_t> &cached_threshold_version,
-                                         const char *event);
+                                         std::atomic<uint64_t> &cached_threshold_version, const char *event);
     uint32_t refresh_cached_threshold(std::atomic<uint32_t> &cached_threshold,
                                       std::atomic<uint64_t> &cached_threshold_version) const;
     bool try_skip_stale_reserved_entry(Entry *entry, uint64_t cur_head);
-    
 
 private:
     // 成员变量需按 CacheLine 对齐以避免伪共享

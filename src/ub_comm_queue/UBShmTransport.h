@@ -15,9 +15,9 @@
 #include <vector>
 #include "MPSCRingBuffer.h"
 #include "ThreadPool.h"
+#include "ub_atomic_log_print.h"
 #include "ub_comm_errno.h"
 #include "ub_dist_comm_queue.h"
-#include "ub_atomic_log_print.h"
 
 namespace ub_comm_queue {
 
@@ -110,12 +110,10 @@ public:
     int recv(void *buffer, size_t capacity);
     int get_status(uint8_t node_id, uint8_t priority, ub_comm_queue_status_t *status);
     int set_congestion_threshold(uint8_t priority, uint32_t congestion_threshold_percent);
-    int config_heartbeat(const ub_comm_queue_heartbeat_config_t *request,
-                         ub_comm_queue_heartbeat_config_t *effective);
+    int config_heartbeat(const ub_comm_queue_heartbeat_config_t *request, ub_comm_queue_heartbeat_config_t *effective);
 
     void remove_node_cache(uint32_t node_id);
     void update_cached_congestion_threshold(uint32_t node_id, uint8_t priority, uint32_t threshold, uint64_t version);
-
 
     // 锁实例相关
     bool get_is_for_lock() const;
@@ -181,7 +179,6 @@ private:
     // 去初始化：伪造满 -> 清公告牌 -> 广播删除消息 -> 删缓存
     void deinit_and_broadcast();
     void broadcast_flow_config_update(uint8_t priority, uint32_t threshold, uint64_t version);
-
 
 private:
     uint64_t instance_id_;

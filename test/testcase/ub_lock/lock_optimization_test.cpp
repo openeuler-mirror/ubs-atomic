@@ -488,7 +488,6 @@ TEST_F(LocalOptimizationTest, DelayReleaseLocalLockHandlesReserveModes)
     unregister_local_lock(shm_);
 }
 
-
 TEST_F(LocalOptimizationTest, DelayReleaseUbLockNoOwnerOrSlot)
 {
     ub_location_t loc{1, 2};
