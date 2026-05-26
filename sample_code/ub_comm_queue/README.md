@@ -375,3 +375,37 @@ if (ret == UB_COMM_OK) {
 ```
 
 流控日志默认开启，只在状态边缘打印：首次进入拥塞、从拥塞恢复。普通模式日志字段包含 Ring 地址、微秒时间戳、使用量、总容量、阈值和历史最大深度。定义 `UB_COMM_QUEUE_ENABLE_DEBUG_STATS` 后，状态结构和日志会额外包含环满失败次数、CAS 失败次数、拥塞进入/退出时间戳。防抖采样由内部策略闭环处理，不需要接入方配置。
+用法变成：
+
+# B 节点/接收端，长期服务
+./reliability_eer_demo --role B --case service -s shm_node0_export -r shm_node1_export -l 1
+A 节点按单个用例跑：
+
+# 半写/发送端压力验证
+./reliability_eer_demo --role A --case send -s shm_node0_export -r shm_node1_export -n 512 -t 4 -l 1
+
+# 心跳：默认配置查询后验证
+./reliability_eer_demo --role A --case rcv-default -s shm_node0_export -r shm_node1_export -l 1
+
+# 心跳：设置 100/100/1500 后验证
+./reliability_eer_demo --role A --case rcv-normal -s shm_node0_export -r shm_node1_export -l 1
+
+# 心跳配置接口 001/002/003
+./reliability_eer_demo --role A --case if -s shm_node0_export -r shm_node1_export -l 1
+
+# 生产端被 kill/stop 后，恢复后单独探测
+./reliability_eer_demo --role A --case probe -s shm_node0_export -r shm_node1_export -l 1
+对于 rcv-default / rcv-normal，A 端会停在类似提示：
+
+手动故障注入点：请现在暂停接收端 B。
+在 B 节点执行：kill -STOP <B端pid>
+确认操作完成后按 Enter 继续...
+感知超时后还会再次停住，提示你恢复：
+
+已感知 B 端不可用。请现在恢复接收端 B。
+在 B 节点执行：kill -CONT <B端pid>
+确认操作完成后按 Enter 继续...
+另外我保留了同机自动注入：
+
+./reliability_eer_demo --role A --case rcv-normal \
+  --peer-pid <B端pid> --fault-after-ms 2000 --resume-after-ms 3000
