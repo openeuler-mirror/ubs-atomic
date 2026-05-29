@@ -451,16 +451,22 @@ int comm_example(void)
 }
 ```
 
-## 3. 分布式读写锁
+## 3. 分布式锁
 
 ### 3.1 模块说明
 
-分布式读写锁通过调用方提供的共享内存对象保存锁状态，支持共享锁 `S`、共享排他锁 `SX`、排他锁 `X`，并提供故障恢复、持有者查询和重建能力。
+分布式锁模块提供三种锁类型：
+- **分布式读写锁**：支持共享锁 `S`、共享排他锁 `SX`、排他锁 `X`，并提供故障恢复、持有者查询和重建能力。
+- **分布式互斥锁**：轻量级互斥锁，适合简单的排他访问场景。
+- **分布式自旋锁**：基于 CAS 的自旋锁，适合极短临界区场景。
 
 **全局约束**
 
-- 共享内存中需为锁对象预留 `UB_RW_LOCK_SIZE` 字节，当前为 `640` 字节。
-- `ub_rw_lock_t` 是不透明共享内存布局类型，调用方不应依赖其内部字段。
+- 共享内存中需为锁对象预留足够空间：
+  - 读写锁：`UB_RW_LOCK_SIZE` = 640 字节
+  - 互斥锁：`UB_MUTEX_LOCK_SIZE` = 384 字节
+  - 自旋锁：`UB_SPIN_LOCK_SIZE` = 64 字节
+- `ub_rw_lock_t`、`ub_mutex_lock_t`、`ub_spin_lock_t` 是不透明共享内存布局类型，调用方不应依赖其内部字段。
 - `ub_location_t` 用于标识锁调用者，`node_id` 和 `tid` 应在业务集群内能唯一定位调用线程或逻辑线程。
 
 ### 3.2 公开数据结构
@@ -469,6 +475,8 @@ int comm_example(void)
 | --- | --- | --- |
 | `time_ms_t` | `uint64_t` | 毫秒时间戳类型 |
 | `ub_rw_lock_t` | 不透明结构体 | 分布式读写锁共享内存对象 |
+| `ub_mutex_lock_t` | 不透明结构体 | 分布式互斥锁共享内存对象 |
+| `ub_spin_lock_t` | 不透明结构体 | 分布式自旋锁共享内存对象 |
 
 #### `ub_lock_mode_t`
 
@@ -632,14 +640,122 @@ int comm_example(void)
 | `rebuild_info` | `const ub_lock_rebuild_info_t *` | 聚合后的查询结果 | 非空；`query_results` 和 `query_result_count` 应匹配 |
 | `location` | `const ub_location_t *` | 执行重建的调用者位置 | 非空 |
 
-**分布式锁使用样例**
+### 3.10 分布式互斥锁接口
+
+#### `ub_mutex_lock_create`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_mutex_lock_create` |
+| 接口描述 | 初始化分布式互斥锁。 |
+| 接口类型 | 函数 |
+| 函数原型 | `void ub_mutex_lock_create(ub_mutex_lock_t *lock);` |
+| 返回参数 | 无。参数无效时直接返回。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `lock` | `ub_mutex_lock_t *` | 共享内存互斥锁对象地址 | 非空；指向至少 `UB_MUTEX_LOCK_SIZE` 字节共享内存 |
+
+#### `ub_mutex_lock_free`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_mutex_lock_free` |
+| 接口描述 | 释放分布式互斥锁关联资源。 |
+| 接口类型 | 函数 |
+| 函数原型 | `void ub_mutex_lock_free(ub_mutex_lock_t *lock);` |
+| 返回参数 | 无。参数无效时直接返回。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `lock` | `ub_mutex_lock_t *` | 共享内存互斥锁对象地址 | 非空 |
+
+#### `ub_mutex_lock`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_mutex_lock` |
+| 接口描述 | 获取分布式互斥锁。 |
+| 接口类型 | 函数 |
+| 函数原型 | `ub_lock_result_t ub_mutex_lock(ub_mutex_lock_t *lock, time_ms_t timeout_ms, const ub_location_t *location);` |
+| 返回参数 | 成功返回 `UB_LOCK_SUCCESS`；超时返回 `UB_LOCK_TIMEOUT`；参数无效返回 `UB_LOCK_ERROR`。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `lock` | `ub_mutex_lock_t *` | 共享内存互斥锁对象地址 | 非空，且已通过 `ub_mutex_lock_create` 初始化 |
+| `timeout_ms` | `time_ms_t` | 超时时间，单位毫秒 | 0 表示使用默认值 10000ms |
+| `location` | `const ub_location_t *` | 调用者位置 | 非空 |
+
+#### `ub_mutex_unlock`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_mutex_unlock` |
+| 接口描述 | 释放分布式互斥锁。 |
+| 接口类型 | 函数 |
+| 函数原型 | `ub_lock_result_t ub_mutex_unlock(ub_mutex_lock_t *lock, const ub_location_t *location);` |
+| 返回参数 | 成功返回 `UB_LOCK_SUCCESS`；参数无效或调用者不匹配返回 `UB_LOCK_ERROR`。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `lock` | `ub_mutex_lock_t *` | 共享内存互斥锁对象地址 | 非空，且已初始化 |
+| `location` | `const ub_location_t *` | 调用者位置 | 非空，且应与持锁者匹配 |
+
+### 3.11 分布式自旋锁接口
+
+#### `ub_spin_lock_init`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_spin_lock_init` |
+| 接口描述 | 初始化分布式自旋锁。 |
+| 接口类型 | 函数 |
+| 函数原型 | `void ub_spin_lock_init(ub_spin_lock_t *lock);` |
+| 返回参数 | 无。参数无效时直接返回。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `lock` | `ub_spin_lock_t *` | 共享内存自旋锁对象地址 | 非空；指向至少 `UB_SPIN_LOCK_SIZE` 字节共享内存 |
+
+#### `ub_spin_lock`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_spin_lock` |
+| 接口描述 | 获取分布式自旋锁。 |
+| 接口类型 | 函数 |
+| 函数原型 | `ub_lock_result_t ub_spin_lock(ub_spin_lock_t *lock, time_ms_t timeout_ms, const ub_location_t *location);` |
+| 返回参数 | 成功返回 `UB_LOCK_SUCCESS`；超时返回 `UB_LOCK_TIMEOUT`；参数无效返回 `UB_LOCK_ERROR`。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `lock` | `ub_spin_lock_t *` | 共享内存自旋锁对象地址 | 非空，且已通过 `ub_spin_lock_init` 初始化 |
+| `timeout_ms` | `time_ms_t` | 超时时间，单位毫秒 | 0 表示使用默认值 10000ms |
+| `location` | `const ub_location_t *` | 调用者位置 | 非空 |
+
+#### `ub_spin_unlock`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_spin_unlock` |
+| 接口描述 | 释放分布式自旋锁。 |
+| 接口类型 | 函数 |
+| 函数原型 | `ub_lock_result_t ub_spin_unlock(ub_spin_lock_t *lock, const ub_location_t *location);` |
+| 返回参数 | 成功返回 `UB_LOCK_SUCCESS`；参数无效或调用者不匹配返回 `UB_LOCK_ERROR`。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `lock` | `ub_spin_lock_t *` | 共享内存自旋锁对象地址 | 非空，且已初始化 |
+| `location` | `const ub_location_t *` | 调用者位置 | 非空，且应与持锁者匹配 |
+
+### 3.12 分布式锁使用样例
 
 ```c
 #include <stdbool.h>
 #include "ub_dist_lock.h"
 #include <stdlib.h>
 
-void lock_example(void)
+void rw_lock_example(void)
 {
     ub_rw_lock_t *lock = (ub_rw_lock_t *)calloc(1, UB_RW_LOCK_SIZE);
     ub_location_t loc = {.tid = 1001, .node_id = 1};
@@ -652,6 +768,33 @@ void lock_example(void)
         (void)ub_rw_lock_x_unlock(lock, &policy, &loc);
     }
     ub_rw_lock_free(lock, &loc);
+    free(lock);
+}
+
+void mutex_lock_example(void)
+{
+    ub_mutex_lock_t *lock = (ub_mutex_lock_t *)calloc(1, UB_MUTEX_LOCK_SIZE);
+    ub_location_t loc = {.tid = 1001, .node_id = 1};
+
+    ub_mutex_lock_create(lock);
+    if (ub_mutex_lock(lock, 10000, &loc) == UB_LOCK_SUCCESS) {
+        /* 临界区 */
+        (void)ub_mutex_unlock(lock, &loc);
+    }
+    ub_mutex_lock_free(lock);
+    free(lock);
+}
+
+void spin_lock_example(void)
+{
+    ub_spin_lock_t *lock = (ub_spin_lock_t *)calloc(1, UB_SPIN_LOCK_SIZE);
+    ub_location_t loc = {.tid = 1001, .node_id = 1};
+
+    ub_spin_lock_init(lock);
+    if (ub_spin_lock(lock, 10000, &loc) == UB_LOCK_SUCCESS) {
+        /* 临界区（应极短） */
+        (void)ub_spin_unlock(lock, &loc);
+    }
     free(lock);
 }
 ```
