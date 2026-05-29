@@ -995,7 +995,11 @@ int UBShmTransport::send(const message_t *msg)
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Invalid priority %u", prio);
         return -EINVAL;
     }
-    if (__builtin_expect(dest_id != conf_.current_node_id && dest_id < MAX_NODES_LIMIT &&
+    if (__builtin_expect(dest_id >= MAX_NODES_LIMIT, 0)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Invalid destination node id %u (limit: %u)", dest_id, MAX_NODES_LIMIT);
+        return -EINVAL;
+    }
+    if (__builtin_expect(dest_id != conf_.current_node_id &&
                              !peer_alive_[dest_id].load(std::memory_order_acquire),
                          0)) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: destination consumer heartbeat timeout, node=%u", dest_id);
