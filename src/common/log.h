@@ -15,7 +15,8 @@
 #include <thread>
 
 // 日志等级枚举
-enum class LogLevel {
+enum class LogLevel
+{
     DEBUG,
     INFO,
     WARN,

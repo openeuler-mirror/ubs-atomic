@@ -81,12 +81,14 @@ typedef void *ub_shm_comm_t;
 /* message processing function type */
 typedef void (*ub_callback_t)(const message_t *msg, void *ctx);
 
-typedef enum {
+typedef enum
+{
     UB_FUNC_SYNC = 0, /* synchronous callback */
     UB_FUNC_ASYNC     /* asynchronous callback */
 } ub_func_type_t;     /* callback type*/
 
-typedef enum {
+typedef enum
+{
     UB_COMM_QUEUE_IDLE = 0,  /* used == 0 */
     UB_COMM_QUEUE_NORMAL,    /* 0 < used < congestion threshold */
     UB_COMM_QUEUE_CONGESTED, /* used >= congestion threshold and used < total */

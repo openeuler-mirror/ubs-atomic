@@ -93,17 +93,17 @@ TEST(UbDistributeLockApiTest, LockApisReturnErrorOnNullArgs)
     EXPECT_EQ(ub_rw_lock_sx_lock(nullptr, nullptr, &loc), UB_LOCK_ERROR);
     EXPECT_EQ(ub_rw_lock_sx_lock(&lock, nullptr, nullptr), UB_LOCK_ERROR);
 
-    MOCKER_CPP(&DistributedLock::lock_s, ub_lock_result_t (*)(const ub_lock_policy_t &, const ub_location_t &))
+    MOCKER_CPP(&DistributedLock::lock_s, ub_lock_result_t(*)(const ub_lock_policy_t &, const ub_location_t &))
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     EXPECT_EQ(ub_rw_lock_s_lock(&lock, nullptr, &loc), UB_LOCK_SUCCESS);
 
-    MOCKER_CPP(&DistributedLock::lock_x, ub_lock_result_t (*)(const ub_lock_policy_t &, const ub_location_t &))
+    MOCKER_CPP(&DistributedLock::lock_x, ub_lock_result_t(*)(const ub_lock_policy_t &, const ub_location_t &))
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     EXPECT_EQ(ub_rw_lock_x_lock(&lock, nullptr, &loc), UB_LOCK_SUCCESS);
 
-    MOCKER_CPP(&DistributedLock::lock_sx, ub_lock_result_t (*)(const ub_lock_policy_t &, const ub_location_t &))
+    MOCKER_CPP(&DistributedLock::lock_sx, ub_lock_result_t(*)(const ub_lock_policy_t &, const ub_location_t &))
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     EXPECT_EQ(ub_rw_lock_sx_lock(&lock, nullptr, &loc), UB_LOCK_SUCCESS);
@@ -123,17 +123,17 @@ TEST(UbDistributeLockApiTest, UnlockApisReturnErrorOnNullArgs)
     EXPECT_EQ(ub_rw_lock_sx_unlock(nullptr, nullptr, &loc), UB_LOCK_ERROR);
     EXPECT_EQ(ub_rw_lock_sx_unlock(&lock, nullptr, nullptr), UB_LOCK_ERROR);
 
-    MOCKER_CPP(&DistributedLock::unlock_s, ub_lock_result_t (*)(const ub_lock_policy_t &, const ub_location_t &))
+    MOCKER_CPP(&DistributedLock::unlock_s, ub_lock_result_t(*)(const ub_lock_policy_t &, const ub_location_t &))
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     EXPECT_EQ(ub_rw_lock_s_unlock(&lock, nullptr, &loc), UB_LOCK_SUCCESS);
 
-    MOCKER_CPP(&DistributedLock::unlock_x, ub_lock_result_t (*)(const ub_lock_policy_t &, const ub_location_t &))
+    MOCKER_CPP(&DistributedLock::unlock_x, ub_lock_result_t(*)(const ub_lock_policy_t &, const ub_location_t &))
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     EXPECT_EQ(ub_rw_lock_x_unlock(&lock, nullptr, &loc), UB_LOCK_SUCCESS);
 
-    MOCKER_CPP(&DistributedLock::unlock_sx, ub_lock_result_t (*)(const ub_lock_policy_t &, const ub_location_t &))
+    MOCKER_CPP(&DistributedLock::unlock_sx, ub_lock_result_t(*)(const ub_lock_policy_t &, const ub_location_t &))
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     EXPECT_EQ(ub_rw_lock_sx_unlock(&lock, nullptr, &loc), UB_LOCK_SUCCESS);
@@ -310,7 +310,7 @@ TEST(UbDistributeLockApiTest, QueryHolderAndRebuildApisReturnErrorOnNullArgs)
     EXPECT_EQ(ub_rw_lock_rebuild(&lock, &new_lock, nullptr, &loc), UB_LOCK_ERROR);
     EXPECT_EQ(ub_rw_lock_rebuild(&lock, &new_lock, &rebuild_info, nullptr), UB_LOCK_ERROR);
 
-    MOCKER_CPP(&DistributedLock::query_holder, ub_lock_result_t (*)(const ub_location_t &, ub_lock_query_result_t &))
+    MOCKER_CPP(&DistributedLock::query_holder, ub_lock_result_t(*)(const ub_location_t &, ub_lock_query_result_t &))
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     EXPECT_EQ(ub_rw_lock_query_holder(&lock, &loc, &query_result), UB_LOCK_SUCCESS);
@@ -318,7 +318,7 @@ TEST(UbDistributeLockApiTest, QueryHolderAndRebuildApisReturnErrorOnNullArgs)
     rebuild_info.query_results = &query_result;
     rebuild_info.query_result_count = 1;
     MOCKER_CPP(&DistributedLock::rebuild,
-               ub_lock_result_t (*)(ub_rw_lock_t *, const ub_lock_rebuild_info_t &, const ub_location_t &))
+               ub_lock_result_t(*)(ub_rw_lock_t *, const ub_lock_rebuild_info_t &, const ub_location_t &))
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     EXPECT_EQ(ub_rw_lock_rebuild(&lock, &new_lock, &rebuild_info, &loc), UB_LOCK_SUCCESS);

@@ -211,7 +211,8 @@ void wake_one_mutex_local_waiter(MutexLocalLock &local_lock)
     }
 }
 
-enum class MutexLocalSpinResult {
+enum class MutexLocalSpinResult
+{
     ACQUIRED,
     NEED_WAIT,
     TIMEOUT

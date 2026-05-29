@@ -35,7 +35,7 @@ struct alignas(16) ub_waiter_t {
     std::atomic<uint32_t> seq; /* seq-based ring state machine */
     ub_lock_mode_t mode;       /* requested lock mode */
     ub_location_t location;    /* waiter identity */
-}; /* One entry in the wait queue ring buffer */
+};                             /* One entry in the wait queue ring buffer */
 
 struct alignas(UB_CACHELINE_SIZE) ub_rw_lock {
     std::atomic<int32_t> lock_word;      /* core lock state machine */
@@ -229,7 +229,8 @@ public:
     std::atomic<bool> remote_release_in_progress_{false};
     std::atomic<bool> hold_global{false};
 
-    enum GlobalState : int {
+    enum GlobalState : int
+    {
         GLOBAL_IDLE = 0,
         GLOBAL_PENDING = 1,
         GLOBAL_HELD = 2
