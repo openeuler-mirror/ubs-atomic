@@ -239,14 +239,20 @@ TEST_F(MessageManageTest, MessageProcessThreadTest)
 
     message_process_thread_func(nullptr, nullptr);
     message_process_thread_func(msg, nullptr);
+    delete[] msg->body;
+    delete msg;
 
     body.type = UB_RELEASE;
     msg = lock_->create_message(loc, 1, body);
     message_process_thread_func(msg, nullptr);
+    delete[] msg->body;
+    delete msg;
 
     body.type = UB_UNKNOWN;
     msg = lock_->create_message(loc, 1, body);
     message_process_thread_func(msg, nullptr);
+    delete[] msg->body;
+    delete msg;
 }
 
 TEST_F(MessageManageTest, MessageProcessGrantNotifiesCtx)
