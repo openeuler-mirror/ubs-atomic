@@ -129,14 +129,16 @@ MPSCRingBuffer::MPSCRingBuffer(uint8_t *buffer_start, uint32_t capacity, uint32_
 
 static uint64_t now_us()
 {
-    struct timespec ts{};
+    struct timespec ts {
+    };
     clock_gettime(CLOCK_REALTIME, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
 
 static uint64_t steady_us()
 {
-    struct timespec ts{};
+    struct timespec ts {
+    };
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }

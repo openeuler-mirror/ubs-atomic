@@ -40,14 +40,16 @@ typedef struct ub_mutex_lock ub_mutex_lock_t;
 /* Shared-memory layout of the distributed spin lock */
 typedef struct ub_spin_lock ub_spin_lock_t;
 
-typedef enum {
+typedef enum
+{
     UB_LOCK_S = 0,  /* shared (read) lock */
     UB_LOCK_SX = 1, /* shared-exclusive (upgrade intent) lock */
     UB_LOCK_X = 2,  /* exclusive (write) lock */
     UB_LOCK_I = 3,  /* Invalid lock type */
 } ub_lock_mode_t;   /* Lock mode definition */
 
-typedef enum {
+typedef enum
+{
     UB_LOCK_SUCCESS = 0,  /* operation succeeded */
     UB_LOCK_TIMEOUT = 1,  /* lock timeout */
     UB_LOCK_CONFLICT = 2, /* lock conflict */

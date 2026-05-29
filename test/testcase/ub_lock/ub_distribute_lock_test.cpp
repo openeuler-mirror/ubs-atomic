@@ -264,7 +264,7 @@ TEST_F(UbDistributedLockTest, UnlockSWakesOneWaiterWhenLastReaderReleases)
     uint32_t ticket = 0;
     ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_S, waiter_loc, ticket), UB_LOCK_SUCCESS);
 
-    MOCKER_CPP(&DistributedLock::verify_param, ub_lock_result_t (*)(const ub_lock_policy_t &, const ub_location_t &))
+    MOCKER_CPP(&DistributedLock::verify_param, ub_lock_result_t(*)(const ub_lock_policy_t &, const ub_location_t &))
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     ub_lock_policy_t policy{1000, false, false};

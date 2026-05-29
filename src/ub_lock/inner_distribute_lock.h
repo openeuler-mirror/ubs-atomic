@@ -13,7 +13,8 @@
 
 namespace ublock {
 
-typedef enum {
+typedef enum
+{
     UB_GRANT = 1,   //唤醒
     UB_RELEASE = 2, //释放
     UB_UNKNOWN = 0
@@ -34,7 +35,7 @@ inline void clear_shared_owner_bitmap(ub_rw_lock_t *lock, uint8_t process_id)
 
 class DistributedLock { // 逻辑封装
 public:
-    explicit DistributedLock(ub_rw_lock_t *shm) : rw_lock_shm_(shm) {};
+    explicit DistributedLock(ub_rw_lock_t *shm) : rw_lock_shm_(shm){};
     ~DistributedLock();
 
     // 锁获取和释放

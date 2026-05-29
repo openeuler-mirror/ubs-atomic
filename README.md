@@ -56,7 +56,7 @@ Ubs-atomic supports distributed atomic services such as distributed locks and qu
 ## 目录结构
 
 ```text
-UB_DistributedTransactionOrderingCoreComponent/
+ubs-atomic/
 ├── 3rdparty/                  # 三方依赖与子模块
 ├── build/                     # CMake 辅助脚本
 ├── doc/                       # 补充文档
@@ -116,7 +116,7 @@ UB_DistributedTransactionOrderingCoreComponent/
 
 ```bash
 git clone <your-repo-url>
-cd UB_DistributedTransactionOrderingCoreComponent
+cd ubs-atomic
 git submodule update --init --recursive
 ```
 
