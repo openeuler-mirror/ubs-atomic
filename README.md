@@ -16,7 +16,7 @@ Ubs-atomic supports distributed atomic services such as distributed locks and qu
 - [常见问题](##常见问题)
 - [License](##License)
 ## 项目简介
-基于共享内存的轻量级分布式基础组件，当前仓库主要提供四类能力：
+基于共享内存的轻量级分布式基础组件，当前仓库主要提供以下几种能力：
 
 - 分布式读写锁：支持 `S` / `SX` / `X` 三种锁模式，适合跨节点并发控制。
 - 分布式互斥锁：轻量级排他锁，适合简单的互斥访问场景。
