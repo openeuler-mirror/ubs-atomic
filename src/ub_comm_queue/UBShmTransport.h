@@ -23,7 +23,7 @@ namespace ub_comm_queue {
 
 // --- 常量定义 ---
 constexpr uint8_t MAX_PRIORITY_LEVELS = 8;
-constexpr uint8_t MAX_NODES_LIMIT = 8;
+constexpr uint8_t MAX_NODES_LIMIT = 16;
 
 // 内置分布式锁环配置
 constexpr uint8_t LOCK_RING_PRIORITY = 0;
