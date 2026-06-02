@@ -22,6 +22,12 @@ static int32_t ub_get_tid_i32()
     return static_cast<int32_t>(::syscall(SYS_gettid));
 }
 
+static uint64_t LocalReaderStateForTid(int32_t tid, uint16_t count = 1)
+{
+    const uint32_t lane = local_lock_lane_for_tid(tid);
+    return static_cast<uint64_t>(count) << (lane * LOCAL_LOCK_READER_LANE_BITS);
+}
+
 class UbDistributedLockTest : public ::testing::Test {
 public:
     void SetUp() override
@@ -225,7 +231,7 @@ TEST_F(UbDistributedLockTest, LockSLocalLockConflictSkipsGlobal)
 
     auto ll_sp = std::make_shared<LocalLock>(shm_);
     register_local_lock(shm_, ll_sp);
-    ll_sp->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    ll_sp->lock_word.store(0, std::memory_order_release);
     ll_sp->read_count.store(1, std::memory_order_release);
 
     shm_->lock_word.store(X_LOCK_DECR, std::memory_order_release);
@@ -258,7 +264,9 @@ TEST_F(UbDistributedLockTest, UnlockSWakesOneWaiterWhenLastReaderReleases)
     ll_sp->global_read_ref_count_.store(1, std::memory_order_release);
     ll_sp->global_state_.store(LocalLock::GLOBAL_HELD, std::memory_order_release);
     ll_sp->read_count.store(1, std::memory_order_release);
-    ll_sp->lock_word.v.store(X_LOCK_DECR - 1, std::memory_order_release);
+    ub_location_t loc{1, 1};
+    loc.tid = ub_get_tid_i32();
+    ll_sp->lock_word.store(LocalReaderStateForTid(loc.tid), std::memory_order_release);
 
     ub_location_t waiter_loc{2, 3};
     uint32_t ticket = 0;
@@ -268,8 +276,6 @@ TEST_F(UbDistributedLockTest, UnlockSWakesOneWaiterWhenLastReaderReleases)
         .stubs()
         .will(returnValue(UB_LOCK_SUCCESS));
     ub_lock_policy_t policy{1000, false, false};
-    ub_location_t loc{1, 1};
-    loc.tid = ub_get_tid_i32();
 
     EXPECT_EQ(lock_->unlock_s(policy, loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->queue_head.load(), 0u);
