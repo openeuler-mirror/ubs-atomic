@@ -1217,11 +1217,6 @@ int UBShmTransport::config_heartbeat(const ub_comm_queue_heartbeat_config_t *req
             return -EINVAL;
         }
 
-        uint64_t min_timeout_ms = static_cast<uint64_t>(request->check_interval_ms) * 2ULL;
-        if (static_cast<uint64_t>(request->timeout_ms) < min_timeout_ms) {
-            return -EINVAL;
-        }
-
         heartbeat_interval_us_.store(static_cast<uint64_t>(request->heartbeat_interval_ms) * US_PER_MS,
                                      std::memory_order_release);
         heartbeat_check_interval_us_.store(static_cast<uint64_t>(request->check_interval_ms) * US_PER_MS,
