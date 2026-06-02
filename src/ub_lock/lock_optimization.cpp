@@ -120,7 +120,7 @@ ub_lock_result_t enqueue_sx_waiter_if_needed(LocalLock &lock, bool is_awakened, 
     }
     ub_lock_result_t ret = lock.enqueue_waiter(UB_LOCK_SX, tid, slot);
     if (ret != UB_LOCK_SUCCESS) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); //队列满
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); // 队列满
     }
     return ret;
 }
@@ -333,7 +333,7 @@ ub_lock_result_t LocalLock::lock_s(int32_t tid, steady_time_point deadline)
             WaiterGuard guard(tid, &ctx);
             ret = enqueue_waiter(UB_LOCK_S, tid, slot);
             if (ret != UB_LOCK_SUCCESS) {
-                ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); //队列满
+                ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); // 队列满
                 return ret;
             }
             // double check 自我唤醒
