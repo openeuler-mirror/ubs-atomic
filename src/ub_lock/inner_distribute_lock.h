@@ -70,7 +70,7 @@ private:
     void clean_timeout_waiter(uint32_t ticket); // 清理等待队列中已经超时的 waiter
     void clean_outqueue_waiter(uint32_t ticket);
     void recover_shared_lock(uint32_t process_id);
-    void cleanup_and_unlock_local(LocalLock *local_lock);
+    void cleanup_and_unlock_local(LocalLock *local_lock, int32_t tid);
     bool peek_head_waiting_mode_clean(ub_lock_mode_t &mode_out);
 
     // 消息管理
