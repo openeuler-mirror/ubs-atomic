@@ -669,7 +669,7 @@ ub_lock_result_t DistributedLock::wait_or_claim_global_s(const ub_location_t &lo
         if (global_state == LocalLock::GLOBAL_IDLE) {
             int expected = LocalLock::GLOBAL_IDLE;
             if (local_lock->global_state_.compare_exchange_strong(
-                expected, LocalLock::GLOBAL_PENDING, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                    expected, LocalLock::GLOBAL_PENDING, std::memory_order_acq_rel, std::memory_order_acquire)) {
                 became_leader = true;
                 return UB_LOCK_SUCCESS;
             }
