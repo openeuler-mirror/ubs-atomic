@@ -161,7 +161,7 @@ TEST_F(MessageManageTest, MessageProcessReleaseWhenRemoteReleaseInProgress)
 TEST_F(MessageManageTest, MessageProcessReleaseWhenLocalLockHeld)
 {
     auto *local_lock = new LocalLock(shm_);
-    local_lock->lock_word.v.store(X_LOCK_DECR - 1, std::memory_order_release);
+    local_lock->lock_word.store(1, std::memory_order_release);
 
     local_msg_body_t body{};
     body.addr = local_lock;
