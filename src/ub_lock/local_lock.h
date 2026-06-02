@@ -83,8 +83,8 @@ constexpr uint32_t LOCAL_LOCK_READER_LANE_BITS = 16;
 constexpr uint64_t LOCAL_LOCK_READER_COUNT_MASK = 0x3FFFu;
 constexpr uint64_t LOCAL_LOCK_READER_SENTINEL = 0x4000u;
 constexpr uint32_t LOCAL_LOCK_SX_LANE = 0;
-constexpr uint64_t LOCAL_LOCK_SX_FLAG = 0x8000ull;
-constexpr uint64_t LOCAL_LOCK_X_FLAG = 0x8000ull << LOCAL_LOCK_READER_LANE_BITS;
+constexpr uint64_t LOCAL_LOCK_SX_FLAG = 0x8000uLL;
+constexpr uint64_t LOCAL_LOCK_X_FLAG = 0x8000uLL << LOCAL_LOCK_READER_LANE_BITS;
 
 constexpr uint64_t make_local_lock_lane_mask(uint64_t lane_mask)
 {

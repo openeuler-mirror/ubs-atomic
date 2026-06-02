@@ -47,7 +47,9 @@ public:
     void TearDown() override
     {
         delete lock_;
+        lock_ = nullptr;
         delete shm_;
+        shm_ = nullptr;
     }
 
 protected:
@@ -57,7 +59,8 @@ protected:
 
 TEST_F(LocalLockTest, InitResetsState)
 {
-    lock_->lock_word.store(123, std::memory_order_release);
+    constexpr uint64_t kTestLockWordValue = 123;
+    lock_->lock_word.store(kTestLockWordValue, std::memory_order_release);
     lock_->read_count.store(5, std::memory_order_release);
     lock_->waiting_count.store(7, std::memory_order_release);
     lock_->lock_x_owner.store(11, std::memory_order_release);
@@ -401,7 +404,9 @@ public:
             }
         }
         delete lock_;
+        lock_ = nullptr;
         delete shm_;
+        shm_ = nullptr;
     }
 
 protected:

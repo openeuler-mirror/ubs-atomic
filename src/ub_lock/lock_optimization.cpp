@@ -103,6 +103,28 @@ bool local_lock_try_release_sx(LocalLockStateWord &state_word, uint64_t &state_a
     return true;
 }
 
+ub_lock_result_t finish_local_sx_acquire(LocalLock &lock, bool is_awakened, uint32_t slot, int32_t tid)
+{
+    lock.lock_sx_owner.store(tid, std::memory_order_release);
+    lock.sx_recursive_.store(1, std::memory_order_release);
+    if (is_awakened) {
+        lock.clean_outqueue_waiter(slot);
+    }
+    return UB_LOCK_SUCCESS;
+}
+
+ub_lock_result_t enqueue_sx_waiter_if_needed(LocalLock &lock, bool is_awakened, int32_t tid, uint32_t &slot)
+{
+    if (is_awakened) {
+        return UB_LOCK_SUCCESS;
+    }
+    ub_lock_result_t ret = lock.enqueue_waiter(UB_LOCK_SX, tid, slot);
+    if (ret != UB_LOCK_SUCCESS) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); //队列满
+    }
+    return ret;
+}
+
 } // namespace
 
 /*
@@ -418,53 +440,40 @@ ub_lock_result_t LocalLock::lock_sx(bool allow_recursive, int32_t tid, steady_ti
             if (waiting_count.load(std::memory_order_acquire) > 0 && !is_awakened)
                 break;
             if (local_lock_try_acquire_sx(lock_word)) {
-                lock_sx_owner.store(tid, std::memory_order_release);
-                sx_recursive_.store(1, std::memory_order_release);
-                if (is_awakened) {
-                    clean_outqueue_waiter(slot);
-                }
-                return UB_LOCK_SUCCESS;
+                return finish_local_sx_acquire(*this, is_awakened, slot, tid);
             }
-            if (is_awakened) {
+            if (!is_awakened && (i & 0xF) == 0) {
                 cpu_relax();
-                --i;
-                if (std::chrono::steady_clock::now() > deadline) {
-                    clean_timeout_waiter(slot);
-                    ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
-                    return UB_LOCK_TIMEOUT;
-                }
+            }
+            if (!is_awakened) {
                 continue;
             }
-            if ((i & 0xF) == 0) {
-                cpu_relax();
+            cpu_relax();
+            --i;
+            if (std::chrono::steady_clock::now() > deadline) {
+                clean_timeout_waiter(slot);
+                ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
+                return UB_LOCK_TIMEOUT;
             }
         }
-        {
-            local_wait_ctx_t ctx;
-            WaiterGuard guard(tid, &ctx);
-            if (!is_awakened) {
-                ret = enqueue_waiter(UB_LOCK_SX, tid, slot);
-                if (ret != UB_LOCK_SUCCESS) {
-                    ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); //队列满
-                    return ret;
-                }
-            }
-            bool self_handoff = false;
-            uint64_t current_val = lock_word.load(std::memory_order_acquire);
-            if (local_lock_state_is_idle(current_val)) { // 锁完全空闲条件
-                self_handoff = ring_queue_try_self_handoff_if_head<UB_MAX_CAPACITY>(q_head.v, q_tail.v, q.data(), slot);
-            }
-            // 睡眠等待 防止无限循环
-            if (!self_handoff) {
-                // 睡眠等待 防止无限循环
-                if (!ctx.wait(deadline)) {
-                    clean_timeout_waiter(slot);
-                    ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
-                    return UB_LOCK_TIMEOUT;
-                }
-            }
-            is_awakened = true;
+        local_wait_ctx_t ctx;
+        WaiterGuard guard(tid, &ctx);
+        ret = enqueue_sx_waiter_if_needed(*this, is_awakened, tid, slot);
+        if (ret != UB_LOCK_SUCCESS) {
+            return ret;
         }
+        bool self_handoff = false;
+        uint64_t current_val = lock_word.load(std::memory_order_acquire);
+        if (local_lock_state_is_idle(current_val)) { // 锁完全空闲条件
+            self_handoff = ring_queue_try_self_handoff_if_head<UB_MAX_CAPACITY>(q_head.v, q_tail.v, q.data(), slot);
+        }
+        // 睡眠等待 防止无限循环
+        if (!self_handoff && !ctx.wait(deadline)) {
+            clean_timeout_waiter(slot);
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
+            return UB_LOCK_TIMEOUT;
+        }
+        is_awakened = true;
     }
 }
 

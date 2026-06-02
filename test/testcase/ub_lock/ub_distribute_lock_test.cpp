@@ -46,7 +46,9 @@ public:
             }
         }
         delete lock_;
+        lock_ = nullptr;
         delete shm_;
+        shm_ = nullptr;
         GlobalMockObject::verify();
     }
 

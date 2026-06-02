@@ -657,6 +657,41 @@ bool DistributedLock::wait_follower_s(const ub_location_t &location, LocalLock *
     return true;
 }
 
+ub_lock_result_t DistributedLock::wait_or_claim_global_s(const ub_location_t &location, LocalLock *local_lock,
+                                                         const steady_time_point &deadline, bool &became_leader)
+{
+    became_leader = false;
+    while (true) {
+        if (local_lock->try_inc_global_ref()) {
+            return UB_LOCK_SUCCESS;
+        }
+        const int global_state = local_lock->global_state_.load(std::memory_order_acquire);
+        if (global_state == LocalLock::GLOBAL_IDLE) {
+            int expected = LocalLock::GLOBAL_IDLE;
+            if (local_lock->global_state_.compare_exchange_strong(
+                    expected, LocalLock::GLOBAL_PENDING, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                became_leader = true;
+                return UB_LOCK_SUCCESS;
+            }
+            continue;
+        }
+        if (global_state == LocalLock::GLOBAL_PENDING) {
+            if (!wait_follower_s(location, local_lock, deadline)) {
+                (void)local_lock->unlock_s(location.tid);
+                return UB_LOCK_TIMEOUT;
+            }
+            continue;
+        }
+        if (std::chrono::steady_clock::now() > deadline) {
+            dump_timeout_holder_info(location, UB_LOCK_S, local_lock, "local_global_state_wait");
+            (void)local_lock->unlock_s(location.tid);
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "The UB lock hold timeout");
+            return UB_LOCK_TIMEOUT;
+        }
+        cpu_relax();
+    }
+}
+
 ub_lock_result_t DistributedLock::spin_wait_s_loop(const ub_location_t &location, LocalLock *local_lock,
                                                    const steady_time_point &deadline)
 {
@@ -754,33 +789,11 @@ ub_lock_result_t DistributedLock::lock_s(const ub_lock_policy_t &policy, const u
         }
         return ret;
     }
-    while (true) {
-        if (local_lock->try_inc_global_ref()) {
-            return UB_LOCK_SUCCESS;
-        }
-        const int global_state = local_lock->global_state_.load(std::memory_order_acquire);
-        if (global_state == LocalLock::GLOBAL_IDLE) {
-            int expected = LocalLock::GLOBAL_IDLE;
-            if (local_lock->global_state_.compare_exchange_strong(
-                    expected, LocalLock::GLOBAL_PENDING, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                break;
-            }
-            continue;
-        }
-        if (global_state == LocalLock::GLOBAL_PENDING) {
-            if (!wait_follower_s(location, local_lock, deadline)) {
-                (void)local_lock->unlock_s(location.tid);
-                return UB_LOCK_TIMEOUT;
-            }
-            continue;
-        }
-        if (std::chrono::steady_clock::now() > deadline) {
-            dump_timeout_holder_info(location, UB_LOCK_S, local_lock, "local_global_state_wait");
-            (void)local_lock->unlock_s(location.tid);
-            ATOMIC_LOG(LOG_LEVEL_ERROR, "The UB lock hold timeout");
-            return UB_LOCK_TIMEOUT;
-        }
-        cpu_relax();
+
+    bool became_leader = false;
+    ret = wait_or_claim_global_s(location, local_lock, deadline, became_leader);
+    if (ret != UB_LOCK_SUCCESS || !became_leader) {
+        return ret;
     }
 
     ret = delay_release_local_lock(*local_lock, UB_LOCK_S, location);
