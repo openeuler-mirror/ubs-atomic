@@ -22,7 +22,7 @@
 namespace ublock {
 namespace ut {
 
-static int32_t ub_get_tid_i32()
+static int32_t UbGetTidI32()
 {
     return static_cast<int32_t>(::syscall(SYS_gettid));
 }
@@ -35,18 +35,18 @@ static ub_location_t make_location(uint8_t node_id, int32_t tid)
     return loc;
 }
 
-constexpr int32_t kInitStateEmpty = 0;
-constexpr int32_t kInitStateReady = 2;
+constexpr int32_t K_INIT_STATE_EMPTY = 0;
+constexpr int32_t K_INIT_STATE_READY = 2;
 constexpr time_ms_t kMinTimeoutMs = 1;
 constexpr time_ms_t kDefaultLockTimeoutMs = 100;
 constexpr time_ms_t kWaitDeadlineMs = 500;
 constexpr time_ms_t kConcurrentLockTimeoutMs = 5000;
 constexpr time_ms_t kLongHoldTimeoutMs = 10000;
 constexpr time_ms_t kUseDefaultTimeoutMs = 0;
-constexpr int kLockUnlockCycles = 10;
-constexpr uint32_t kNotifyDelayMs = 50;
-constexpr uint32_t kOwnerSwitchDelayMs = 20;
-constexpr uint32_t kDefaultWaiterCount = 3;
+constexpr int K_LOCK_UNLOCK_CYCLES = 10;
+constexpr uint32_t K_NOTIFY_DELAY_MS = 50;
+constexpr uint32_t K_OWNER_SWITCH_DELAY_MS = 20;
+constexpr uint32_t K_DEFAULT_WAITER_COUNT = 3;
 
 // =============================================================================
 // SpinLock Unit Tests
@@ -75,9 +75,9 @@ protected:
 
 TEST_F(SpinLockTest, InitSetsReadyState)
 {
-    EXPECT_EQ(shm_->init_state.load(std::memory_order_acquire), kInitStateEmpty);
+    EXPECT_EQ(shm_->init_state.load(std::memory_order_acquire), K_INIT_STATE_EMPTY);
     lock_->lock_init();
-    EXPECT_EQ(shm_->init_state.load(std::memory_order_acquire), kInitStateReady);
+    EXPECT_EQ(shm_->init_state.load(std::memory_order_acquire), K_INIT_STATE_READY);
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), LOCK_INVALID_OWNER);
     EXPECT_TRUE(lock_->is_ready());
 }
@@ -88,13 +88,13 @@ TEST_F(SpinLockTest, InitIsIdempotent)
     EXPECT_TRUE(lock_->is_ready());
     lock_->lock_init();
     EXPECT_TRUE(lock_->is_ready());
-    EXPECT_EQ(shm_->init_state.load(std::memory_order_acquire), kInitStateReady);
+    EXPECT_EQ(shm_->init_state.load(std::memory_order_acquire), K_INIT_STATE_READY);
 }
 
 TEST_F(SpinLockTest, LockAcquiresSuccessfully)
 {
     lock_->lock_init();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
     uint64_t expected = make_global_owner(loc.node_id, loc.tid);
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), expected);
@@ -103,7 +103,7 @@ TEST_F(SpinLockTest, LockAcquiresSuccessfully)
 TEST_F(SpinLockTest, UnlockReleasesSuccessfully)
 {
     lock_->lock_init();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), LOCK_INVALID_OWNER);
@@ -112,8 +112,8 @@ TEST_F(SpinLockTest, UnlockReleasesSuccessfully)
 TEST_F(SpinLockTest, LockUnlockCycle)
 {
     lock_->lock_init();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
-    for (int i = 0; i < kLockUnlockCycles; ++i) {
+    ub_location_t loc = make_location(0, UbGetTidI32());
+    for (int i = 0; i < K_LOCK_UNLOCK_CYCLES; ++i) {
         EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
         EXPECT_EQ(lock_->unlock(loc), UB_LOCK_SUCCESS);
     }
@@ -122,7 +122,7 @@ TEST_F(SpinLockTest, LockUnlockCycle)
 TEST_F(SpinLockTest, RecursiveLockRejected)
 {
     lock_->lock_init();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_ERROR);
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_SUCCESS);
@@ -131,34 +131,34 @@ TEST_F(SpinLockTest, RecursiveLockRejected)
 TEST_F(SpinLockTest, LockWithInvalidNodeIdReturnsError)
 {
     lock_->lock_init();
-    ub_location_t loc = make_location(UB_MAX_NODES, ub_get_tid_i32());
+    ub_location_t loc = make_location(UB_MAX_NODES, UbGetTidI32());
     EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_ERROR);
 }
 
 TEST_F(SpinLockTest, LockWhenNotReadyReturnsError)
 {
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_ERROR);
 }
 
 TEST_F(SpinLockTest, UnlockWithInvalidNodeIdReturnsError)
 {
     lock_->lock_init();
-    ub_location_t loc = make_location(UB_MAX_NODES, ub_get_tid_i32());
+    ub_location_t loc = make_location(UB_MAX_NODES, UbGetTidI32());
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_ERROR);
 }
 
 TEST_F(SpinLockTest, UnlockWhenNotReadyReturnsError)
 {
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_ERROR);
 }
 
 TEST_F(SpinLockTest, UnlockNotOwnerReturnsError)
 {
     lock_->lock_init();
-    ub_location_t loc1 = make_location(0, ub_get_tid_i32());
-    ub_location_t loc2 = make_location(0, ub_get_tid_i32() + 1);
+    ub_location_t loc1 = make_location(0, UbGetTidI32());
+    ub_location_t loc2 = make_location(0, UbGetTidI32() + 1);
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc1), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->unlock(loc2), UB_LOCK_ERROR);
     EXPECT_EQ(lock_->unlock(loc1), UB_LOCK_SUCCESS);
@@ -167,8 +167,8 @@ TEST_F(SpinLockTest, UnlockNotOwnerReturnsError)
 TEST_F(SpinLockTest, LockTimeoutOnContendedLock)
 {
     lock_->lock_init();
-    ub_location_t loc1 = make_location(0, ub_get_tid_i32());
-    ub_location_t loc2 = make_location(0, ub_get_tid_i32() + 1);
+    ub_location_t loc1 = make_location(0, UbGetTidI32());
+    ub_location_t loc2 = make_location(0, UbGetTidI32() + 1);
     ASSERT_EQ(lock_->lock(kLongHoldTimeoutMs, loc1), UB_LOCK_SUCCESS);
 
     EXPECT_EQ(lock_->lock(kMinTimeoutMs, loc2), UB_LOCK_TIMEOUT);
@@ -178,8 +178,8 @@ TEST_F(SpinLockTest, LockTimeoutOnContendedLock)
 TEST_F(SpinLockTest, LockTimeoutUsesDefaultWhenZero)
 {
     lock_->lock_init();
-    ub_location_t loc1 = make_location(0, ub_get_tid_i32());
-    ub_location_t loc2 = make_location(0, ub_get_tid_i32() + 1);
+    ub_location_t loc1 = make_location(0, UbGetTidI32());
+    ub_location_t loc2 = make_location(0, UbGetTidI32() + 1);
     ASSERT_EQ(lock_->lock(kLongHoldTimeoutMs, loc1), UB_LOCK_SUCCESS);
 
     EXPECT_EQ(lock_->lock(kUseDefaultTimeoutMs, loc2), UB_LOCK_TIMEOUT);
@@ -197,7 +197,7 @@ TEST_F(SpinLockTest, ConcurrentLockUnlockDifferentThreads)
 
     for (int32_t i = 0; i < kNumThreads; ++i) {
         threads.emplace_back([this, &shared_counter, &ready, i]() {
-            ub_location_t loc = make_location(0, ub_get_tid_i32() + i);
+            ub_location_t loc = make_location(0, UbGetTidI32() + i);
             while (!ready.load(std::memory_order_acquire)) {
                 cpu_relax();
             }
@@ -221,7 +221,7 @@ TEST_F(SpinLockTest, ConcurrentLockUnlockDifferentThreads)
 TEST_F(SpinLockTest, UnlockFailsWhenOwnerChangedExternally)
 {
     lock_->lock_init();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
 
     shm_->lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
@@ -256,7 +256,7 @@ TEST(SpinLockCApiTest, UnlockNullArgsReturnError)
 TEST(SpinLockCApiTest, CApiLockUnlockCycle)
 {
     ub_spin_lock_t lock{};
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ub_spin_lock_init(&lock);
     EXPECT_EQ(ub_spin_lock(&lock, kDefaultLockTimeoutMs, &loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(ub_spin_unlock(&lock, &loc), UB_LOCK_SUCCESS);
@@ -291,7 +291,7 @@ protected:
 TEST_F(MutexLockTest, CreateSetsReadyState)
 {
     lock_->lock_create();
-    EXPECT_EQ(shm_->is_inited.load(std::memory_order_acquire), kInitStateReady);
+    EXPECT_EQ(shm_->is_inited.load(std::memory_order_acquire), K_INIT_STATE_READY);
     EXPECT_TRUE(lock_->is_ready());
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), LOCK_INVALID_OWNER);
     EXPECT_EQ(shm_->waiting_count.load(std::memory_order_acquire), 0u);
@@ -305,7 +305,7 @@ TEST_F(MutexLockTest, CreateIsIdempotent)
     EXPECT_TRUE(lock_->is_ready());
     lock_->lock_create();
     EXPECT_TRUE(lock_->is_ready());
-    EXPECT_EQ(shm_->is_inited.load(std::memory_order_acquire), kInitStateReady);
+    EXPECT_EQ(shm_->is_inited.load(std::memory_order_acquire), K_INIT_STATE_READY);
 }
 
 TEST_F(MutexLockTest, CreateInitializesWaitQueue)
@@ -320,7 +320,7 @@ TEST_F(MutexLockTest, CreateInitializesWaitQueue)
 TEST_F(MutexLockTest, LockAcquiresSuccessfully)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
     uint64_t expected = make_global_owner(loc.node_id, loc.tid);
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), expected);
@@ -330,7 +330,7 @@ TEST_F(MutexLockTest, LockAcquiresSuccessfully)
 TEST_F(MutexLockTest, UnlockReleasesSuccessfully)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), LOCK_INVALID_OWNER);
@@ -339,8 +339,8 @@ TEST_F(MutexLockTest, UnlockReleasesSuccessfully)
 TEST_F(MutexLockTest, LockUnlockCycle)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
-    for (int i = 0; i < kLockUnlockCycles; ++i) {
+    ub_location_t loc = make_location(0, UbGetTidI32());
+    for (int i = 0; i < K_LOCK_UNLOCK_CYCLES; ++i) {
         EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
         EXPECT_EQ(lock_->unlock(loc), UB_LOCK_SUCCESS);
     }
@@ -349,7 +349,7 @@ TEST_F(MutexLockTest, LockUnlockCycle)
 TEST_F(MutexLockTest, RecursiveLockRejected)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_ERROR);
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_SUCCESS);
@@ -358,34 +358,34 @@ TEST_F(MutexLockTest, RecursiveLockRejected)
 TEST_F(MutexLockTest, LockWithInvalidNodeIdReturnsError)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(UB_MAX_NODES, ub_get_tid_i32());
+    ub_location_t loc = make_location(UB_MAX_NODES, UbGetTidI32());
     EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_ERROR);
 }
 
 TEST_F(MutexLockTest, LockWhenNotReadyReturnsError)
 {
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_ERROR);
 }
 
 TEST_F(MutexLockTest, UnlockWithInvalidNodeIdReturnsError)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(UB_MAX_NODES, ub_get_tid_i32());
+    ub_location_t loc = make_location(UB_MAX_NODES, UbGetTidI32());
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_ERROR);
 }
 
 TEST_F(MutexLockTest, UnlockWhenNotReadyReturnsError)
 {
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_ERROR);
 }
 
 TEST_F(MutexLockTest, UnlockNotOwnerReturnsError)
 {
     lock_->lock_create();
-    ub_location_t loc1 = make_location(0, ub_get_tid_i32());
-    ub_location_t loc2 = make_location(0, ub_get_tid_i32() + 1);
+    ub_location_t loc1 = make_location(0, UbGetTidI32());
+    ub_location_t loc2 = make_location(0, UbGetTidI32() + 1);
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc1), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->unlock(loc2), UB_LOCK_ERROR);
     EXPECT_EQ(lock_->unlock(loc1), UB_LOCK_SUCCESS);
@@ -394,8 +394,8 @@ TEST_F(MutexLockTest, UnlockNotOwnerReturnsError)
 TEST_F(MutexLockTest, LockTimeoutOnContendedLock)
 {
     lock_->lock_create();
-    ub_location_t loc1 = make_location(0, ub_get_tid_i32());
-    ub_location_t loc2 = make_location(0, ub_get_tid_i32() + 1);
+    ub_location_t loc1 = make_location(0, UbGetTidI32());
+    ub_location_t loc2 = make_location(0, UbGetTidI32() + 1);
     ASSERT_EQ(lock_->lock(kLongHoldTimeoutMs, loc1), UB_LOCK_SUCCESS);
 
     EXPECT_EQ(lock_->lock(kMinTimeoutMs, loc2), UB_LOCK_TIMEOUT);
@@ -405,8 +405,8 @@ TEST_F(MutexLockTest, LockTimeoutOnContendedLock)
 TEST_F(MutexLockTest, LockTimeoutUsesDefaultWhenZero)
 {
     lock_->lock_create();
-    ub_location_t loc1 = make_location(0, ub_get_tid_i32());
-    ub_location_t loc2 = make_location(0, ub_get_tid_i32() + 1);
+    ub_location_t loc1 = make_location(0, UbGetTidI32());
+    ub_location_t loc2 = make_location(0, UbGetTidI32() + 1);
     ASSERT_EQ(lock_->lock(kLongHoldTimeoutMs, loc1), UB_LOCK_SUCCESS);
 
     EXPECT_EQ(lock_->lock(kUseDefaultTimeoutMs, loc2), UB_LOCK_TIMEOUT);
@@ -425,7 +425,7 @@ TEST_F(MutexLockTest, LockFreeWhenIdle)
 TEST_F(MutexLockTest, LockFreeWhenLockHeld)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
     lock_->lock_free();
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_SUCCESS);
@@ -433,13 +433,13 @@ TEST_F(MutexLockTest, LockFreeWhenLockHeld)
 
 TEST_F(MutexLockTest, LockWithoutCreateReturnsError)
 {
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_ERROR);
 }
 
 TEST_F(MutexLockTest, UnlockWithoutCreateReturnsError)
 {
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_ERROR);
 }
 
@@ -454,7 +454,7 @@ TEST_F(MutexLockTest, ConcurrentLockUnlockDifferentThreads)
 
     for (int32_t i = 0; i < kNumThreads; ++i) {
         threads.emplace_back([this, &shared_counter, &ready, i]() {
-            ub_location_t loc = make_location(0, ub_get_tid_i32() + i);
+            ub_location_t loc = make_location(0, UbGetTidI32() + i);
             while (!ready.load(std::memory_order_acquire)) {
                 cpu_relax();
             }
@@ -478,7 +478,7 @@ TEST_F(MutexLockTest, ConcurrentLockUnlockDifferentThreads)
 TEST_F(MutexLockTest, UnlockFailsWhenOwnerChangedExternally)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
 
     shm_->lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
@@ -491,8 +491,8 @@ TEST_F(MutexLockTest, UnlockFailsWhenOwnerChangedExternally)
 TEST_F(MutexLockTest, LockOnDifferentNodes)
 {
     lock_->lock_create();
-    ub_location_t loc0 = make_location(0, ub_get_tid_i32());
-    ub_location_t loc1 = make_location(1, ub_get_tid_i32());
+    ub_location_t loc0 = make_location(0, UbGetTidI32());
+    ub_location_t loc1 = make_location(1, UbGetTidI32());
 
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc0), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), make_global_owner(0, loc0.tid));
@@ -506,7 +506,7 @@ TEST_F(MutexLockTest, LockOnDifferentNodes)
 TEST_F(MutexLockTest, EnqueueWaiterReturnsErrorWhenQueueFull)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
 
     shm_->queue_tail.store(UB_MAX_NODES, std::memory_order_release);
     shm_->queue_head.store(0, std::memory_order_release);
@@ -518,7 +518,7 @@ TEST_F(MutexLockTest, EnqueueWaiterReturnsErrorWhenQueueFull)
 TEST_F(MutexLockTest, CleanTimeoutWaiter)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     uint32_t ticket = 0;
     ASSERT_EQ(lock_->enqueue_waiter(loc, ticket), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->waiting_count.load(std::memory_order_acquire), 1u);
@@ -531,7 +531,7 @@ TEST_F(MutexLockTest, CleanTimeoutWaiter)
 TEST_F(MutexLockTest, CleanOutqueueWaiter)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     uint32_t ticket = 0;
     ASSERT_EQ(lock_->enqueue_waiter(loc, ticket), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->waiting_count.load(std::memory_order_acquire), 1u);
@@ -544,7 +544,7 @@ TEST_F(MutexLockTest, CleanOutqueueWaiter)
 TEST_F(MutexLockTest, TryLockFastAcquiresWhenUnlocked)
 {
     lock_->lock_create();
-    uint64_t identify = make_global_owner(0, ub_get_tid_i32());
+    uint64_t identify = make_global_owner(0, UbGetTidI32());
     EXPECT_TRUE(lock_->try_lock_fast(identify, false, 0));
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), identify);
 }
@@ -552,8 +552,8 @@ TEST_F(MutexLockTest, TryLockFastAcquiresWhenUnlocked)
 TEST_F(MutexLockTest, TryLockFastFailsWhenLocked)
 {
     lock_->lock_create();
-    uint64_t identify1 = make_global_owner(0, ub_get_tid_i32());
-    uint64_t identify2 = make_global_owner(0, ub_get_tid_i32() + 1);
+    uint64_t identify1 = make_global_owner(0, UbGetTidI32());
+    uint64_t identify2 = make_global_owner(0, UbGetTidI32() + 1);
     ASSERT_TRUE(lock_->try_lock_fast(identify1, false, 0));
 
     EXPECT_FALSE(lock_->try_lock_fast(identify2, false, 0));
@@ -563,7 +563,7 @@ TEST_F(MutexLockTest, TryLockFastFailsWhenLocked)
 TEST_F(MutexLockTest, TryLockFastSkipsWhenWaitersExist)
 {
     lock_->lock_create();
-    uint64_t identify = make_global_owner(0, ub_get_tid_i32());
+    uint64_t identify = make_global_owner(0, UbGetTidI32());
     shm_->waiting_count.store(1, std::memory_order_release);
 
     EXPECT_FALSE(lock_->try_lock_fast(identify, false, 0));
@@ -572,7 +572,7 @@ TEST_F(MutexLockTest, TryLockFastSkipsWhenWaitersExist)
 TEST_F(MutexLockTest, TryLockFastAcquiresWhenAwakened)
 {
     lock_->lock_create();
-    uint64_t identify = make_global_owner(0, ub_get_tid_i32());
+    uint64_t identify = make_global_owner(0, UbGetTidI32());
     shm_->waiting_count.store(1, std::memory_order_release);
 
     EXPECT_TRUE(lock_->try_lock_fast(identify, true, 0));
@@ -582,7 +582,7 @@ TEST_F(MutexLockTest, TryLockFastAcquiresWhenAwakened)
 TEST_F(MutexLockTest, CheckRecursiveGlobalOwner)
 {
     lock_->lock_create();
-    uint64_t identify = make_global_owner(0, ub_get_tid_i32());
+    uint64_t identify = make_global_owner(0, UbGetTidI32());
     shm_->lock_owner.store(identify, std::memory_order_release);
     EXPECT_EQ(lock_->check_recursive_global_owner(identify), UB_LOCK_ERROR);
 
@@ -593,9 +593,9 @@ TEST_F(MutexLockTest, CheckRecursiveGlobalOwner)
 TEST_F(MutexLockTest, WaitGlobalHandoffTimeout)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
-    uint64_t holder_identify = make_global_owner(0, ub_get_tid_i32() + 100);
-    shm_->lock_owner.store(holder_identify, std::memory_order_release);
+    ub_location_t loc = make_location(0, UbGetTidI32());
+    uint64_t holderIdentify = make_global_owner(0, UbGetTidI32() + 100);
+    shm_->lock_owner.store(holderIdentify, std::memory_order_release);
     auto deadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(kMinTimeoutMs);
     uint32_t slot = 0;
     EXPECT_EQ(lock_->wait_global_handoff(deadline, loc, slot), UB_LOCK_TIMEOUT);
@@ -605,7 +605,7 @@ TEST_F(MutexLockTest, WaitGlobalHandoffTimeout)
 TEST_F(MutexLockTest, WaitGlobalHandoffSuccess)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kWaitDeadlineMs);
     uint32_t slot = 0;
 
@@ -613,7 +613,7 @@ TEST_F(MutexLockTest, WaitGlobalHandoffSuccess)
     std::thread t(
         [this, &result, &deadline, &loc, &slot]() { result = lock_->wait_global_handoff(deadline, loc, slot); });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(kNotifyDelayMs));
+    std::this_thread::sleep_for(std::chrono::milliseconds(K_NOTIFY_DELAY_MS));
     WaiterRegistry::instance().notify_local_waiter(loc.tid);
 
     t.join();
@@ -623,7 +623,7 @@ TEST_F(MutexLockTest, WaitGlobalHandoffSuccess)
 TEST_F(MutexLockTest, AcquireGlobalSuccess)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kWaitDeadlineMs);
     EXPECT_EQ(lock_->acquire_global(deadline, loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), make_global_owner(loc.node_id, loc.tid));
@@ -632,8 +632,8 @@ TEST_F(MutexLockTest, AcquireGlobalSuccess)
 TEST_F(MutexLockTest, AcquireGlobalTimeout)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
-    uint64_t holder = make_global_owner(0, ub_get_tid_i32() + 100);
+    ub_location_t loc = make_location(0, UbGetTidI32());
+    uint64_t holder = make_global_owner(0, UbGetTidI32() + 100);
     shm_->lock_owner.store(holder, std::memory_order_release);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kMinTimeoutMs);
     EXPECT_EQ(lock_->acquire_global(deadline, loc), UB_LOCK_TIMEOUT);
@@ -643,12 +643,12 @@ TEST_F(MutexLockTest, AcquireGlobalTimeout)
 TEST_F(MutexLockTest, AcquireGlobalRecursiveCheckInLoop)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     uint64_t identify = make_global_owner(loc.node_id, loc.tid);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kWaitDeadlineMs);
     std::thread t([this, identify]() {
         shm_->lock_owner.store(identify, std::memory_order_release);
-        std::this_thread::sleep_for(std::chrono::milliseconds(kOwnerSwitchDelayMs));
+        std::this_thread::sleep_for(std::chrono::milliseconds(K_OWNER_SWITCH_DELAY_MS));
         shm_->lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
     });
     ub_lock_result_t ret = lock_->acquire_global(deadline, loc);
@@ -659,7 +659,7 @@ TEST_F(MutexLockTest, AcquireGlobalRecursiveCheckInLoop)
 TEST_F(MutexLockTest, WaitGlobalHandoffSelfHandoff)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kWaitDeadlineMs);
     uint32_t slot = 0;
     EXPECT_EQ(lock_->wait_global_handoff(deadline, loc, slot), UB_LOCK_SUCCESS);
@@ -668,8 +668,8 @@ TEST_F(MutexLockTest, WaitGlobalHandoffSelfHandoff)
 TEST_F(MutexLockTest, NotifyWaiterSameNodeNotFound)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
-    ub_location_t waiter_loc = make_location(0, ub_get_tid_i32() + 200);
+    ub_location_t loc = make_location(0, UbGetTidI32());
+    ub_location_t waiter_loc = make_location(0, UbGetTidI32() + 200);
     uint32_t ticket = 0;
     ASSERT_EQ(lock_->enqueue_waiter(waiter_loc, ticket), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->waiting_count.load(std::memory_order_acquire), 1u);
@@ -681,8 +681,8 @@ TEST_F(MutexLockTest, NotifyWaiterSameNodeNotFound)
 TEST_F(MutexLockTest, WakeOneWaiterLocalSuccess)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
-    ub_location_t waiter_loc = make_location(0, ub_get_tid_i32() + 300);
+    ub_location_t loc = make_location(0, UbGetTidI32());
+    ub_location_t waiter_loc = make_location(0, UbGetTidI32() + 300);
     local_wait_ctx_t wait_ctx;
     WaiterRegistry::instance().register_waiter(waiter_loc.tid, &wait_ctx);
 
@@ -698,7 +698,7 @@ TEST_F(MutexLockTest, WakeOneWaiterLocalSuccess)
 TEST_F(MutexLockTest, NotifyWaiterRemoteTransportNull)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ub_location_t remote_loc = make_location(1, 999);
     uint32_t ticket = 0;
     ASSERT_EQ(lock_->enqueue_waiter(remote_loc, ticket), UB_LOCK_SUCCESS);
@@ -710,10 +710,10 @@ TEST_F(MutexLockTest, NotifyWaiterRemoteTransportNull)
 TEST_F(MutexLockTest, UnlockWithWaitersTriggersWakeOneWaiter)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
 
-    ub_location_t waiter_loc = make_location(0, ub_get_tid_i32() + 400);
+    ub_location_t waiter_loc = make_location(0, UbGetTidI32() + 400);
     uint32_t ticket = 0;
     ASSERT_EQ(lock_->enqueue_waiter(waiter_loc, ticket), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->waiting_count.load(std::memory_order_acquire), 1u);
@@ -725,7 +725,7 @@ TEST_F(MutexLockTest, UnlockWithWaitersTriggersWakeOneWaiter)
 TEST_F(MutexLockTest, LockRecursiveLocalLockDetection)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
 
     shm_->lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
@@ -738,15 +738,15 @@ TEST_F(MutexLockTest, LockRecursiveLocalLockDetection)
 TEST_F(MutexLockTest, UnlockWithWaitersAfterWakeOneWaiterCleanup)
 {
     lock_->lock_create();
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ASSERT_EQ(lock_->lock(kDefaultLockTimeoutMs, loc), UB_LOCK_SUCCESS);
 
-    for (uint32_t i = 0; i < kDefaultWaiterCount; ++i) {
-        ub_location_t waiter_loc = make_location(0, ub_get_tid_i32() + 500 + static_cast<int32_t>(i));
+    for (uint32_t i = 0; i < K_DEFAULT_WAITER_COUNT; ++i) {
+        ub_location_t waiter_loc = make_location(0, UbGetTidI32() + 500 + static_cast<int32_t>(i));
         uint32_t ticket = 0;
         ASSERT_EQ(lock_->enqueue_waiter(waiter_loc, ticket), UB_LOCK_SUCCESS);
     }
-    EXPECT_GE(shm_->waiting_count.load(std::memory_order_acquire), kDefaultWaiterCount);
+    EXPECT_GE(shm_->waiting_count.load(std::memory_order_acquire), K_DEFAULT_WAITER_COUNT);
 
     EXPECT_EQ(lock_->unlock(loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(shm_->lock_owner.load(std::memory_order_acquire), LOCK_INVALID_OWNER);
@@ -761,7 +761,7 @@ TEST_F(MutexLockTest, UnlockWithWaitersAfterWakeOneWaiterCleanup)
 
 using ublock::ut::kDefaultLockTimeoutMs;
 using ublock::ut::make_location;
-using ublock::ut::ub_get_tid_i32;
+using ublock::ut::UbGetTidI32;
 
 TEST(MutexLockCApiTest, CreateNullLockReturns)
 {
@@ -792,7 +792,7 @@ TEST(MutexLockCApiTest, UnlockNullArgsReturnError)
 TEST(MutexLockCApiTest, CApiLockUnlockCycle)
 {
     ub_mutex_lock_t lock{};
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     ub_mutex_lock_create(&lock);
     EXPECT_EQ(ub_mutex_lock(&lock, kDefaultLockTimeoutMs, &loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(ub_mutex_unlock(&lock, &loc), UB_LOCK_SUCCESS);
@@ -802,6 +802,6 @@ TEST(MutexLockCApiTest, CApiLockUnlockCycle)
 TEST(MutexLockCApiTest, CApiLockWithoutCreateReturnsError)
 {
     ub_mutex_lock_t lock{};
-    ub_location_t loc = make_location(0, ub_get_tid_i32());
+    ub_location_t loc = make_location(0, UbGetTidI32());
     EXPECT_EQ(ub_mutex_lock(&lock, kDefaultLockTimeoutMs, &loc), UB_LOCK_ERROR);
 }
