@@ -610,9 +610,8 @@ TEST_F(MutexLockTest, WaitGlobalHandoffSuccess)
     uint32_t slot = 0;
 
     ub_lock_result_t result = UB_LOCK_ERROR;
-    std::thread t([this, &result, &deadline, &loc, &slot]() {
-        result = lock_->wait_global_handoff(deadline, loc, slot);
-    });
+    std::thread t(
+        [this, &result, &deadline, &loc, &slot]() { result = lock_->wait_global_handoff(deadline, loc, slot); });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(kNotifyDelayMs));
     WaiterRegistry::instance().notify_local_waiter(loc.tid);
@@ -691,8 +690,7 @@ TEST_F(MutexLockTest, WakeOneWaiterLocalSuccess)
     ASSERT_EQ(lock_->enqueue_waiter(waiter_loc, ticket), UB_LOCK_SUCCESS);
 
     lock_->wake_one_waiter(loc);
-    EXPECT_EQ(shm_->wait_queue[ticket & (UB_MAX_NODES - 1)].seq.load(std::memory_order_acquire),
-              UB_WAIT_NOTIFIED);
+    EXPECT_EQ(shm_->wait_queue[ticket & (UB_MAX_NODES - 1)].seq.load(std::memory_order_acquire), UB_WAIT_NOTIFIED);
 
     WaiterRegistry::instance().unregister_waiter(waiter_loc.tid);
 }
@@ -761,9 +759,9 @@ TEST_F(MutexLockTest, UnlockWithWaitersAfterWakeOneWaiterCleanup)
 // MutexLock C API Tests
 // =============================================================================
 
+using ublock::ut::kDefaultLockTimeoutMs;
 using ublock::ut::make_location;
 using ublock::ut::ub_get_tid_i32;
-using ublock::ut::kDefaultLockTimeoutMs;
 
 TEST(MutexLockCApiTest, CreateNullLockReturns)
 {
