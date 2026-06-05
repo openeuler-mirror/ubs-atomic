@@ -179,9 +179,8 @@ static void send_message(uint8_t msg_type, uint8_t dest, const DemoMsg& body_dat
     for (int retry = 0; retry < 100000; ++retry) {
         int ret = ub_comm_queue_send(g_handlep, &msg);
         if (ret >= 0) return;
-        if (ret == UB_COMM_ERR_RING_FULL) { cpu_relax(); continue; }
-        fprintf(stderr, "  [发送失败] ret=%d\n", ret);
-        return;
+        // 负值表示发送失败，队列满等情况均为负值，重试
+        cpu_relax();
     }
     fprintf(stderr, "  [发送超时] 队列持续满\n");
 }
@@ -636,11 +635,12 @@ static void demo_flow_control() {
         msg.body                = buf.data();
 
         int send_ret = ub_comm_queue_send(g_handlep, &msg);
-        if (send_ret == UB_COMM_OK) {
+        if (send_ret == 0) {
             ok_count++;
         } else if (send_ret == UB_COMM_SEND_CONGESTED) {
             congested_count++;
         } else {
+            // 负值表示发送失败（队列满等）
             full_count++;
             if (full_count >= 3) break;
         }
@@ -660,9 +660,9 @@ static void demo_flow_control() {
     printf("  >> 已恢复\n");
 
     printf("\n  流控要点:\n");
-    printf("    - UB_COMM_OK (0):             发送成功，队列正常\n");
+    printf("    - 返回 0:                     发送成功，队列正常\n");
     printf("    - UB_COMM_SEND_CONGESTED (1): 发送成功，但队列已超阈值\n");
-    printf("    - UB_COMM_ERR_RING_FULL:      队列满，发送失败\n");
+    printf("    - 返回负值:                   发送失败（如队列满）\n");
     printf("    - 拥塞阈值作用于本地环 (自发自收路径)\n");
     printf("    - 远端生产者通过共享元数据观察远端环的拥塞状态\n");
     printf("\n");
