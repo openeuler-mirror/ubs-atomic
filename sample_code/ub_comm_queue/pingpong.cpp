@@ -457,7 +457,7 @@ int main(int argc, char* argv[]) {
     // B 角色特殊参数：-n 含义不同（期望接收数），默认 0 表示永远运行
     if (g_role == ROLE_B) {
         g_expect = g_expect_set ? g_msg_count : 0;
-        g_shm_size_mb = 128;
+        g_shm_size_mb = 1024;
     }
 
     // 根据角色校验必要参数
