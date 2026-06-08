@@ -490,6 +490,13 @@ TEST_F(LocalOptimizationTest, DelayReleaseLocalLockHandlesReserveModes)
     ub_location_t loc{2, 0};
     auto local_lock_sp = std::make_shared<LocalLock>(shm_);
     register_local_lock(shm_, local_lock_sp);
+    struct LocalLockRegistryGuard {
+        ub_rw_lock_t *shm;
+        ~LocalLockRegistryGuard()
+        {
+            (void)unregister_local_lock(shm);
+        }
+    } registry_guard{shm_};
     auto *local_lock = local_lock_sp.get();
 
     local_lock->local_is_reserve_lock.store(UB_LOCK_S, std::memory_order_release);
@@ -500,7 +507,6 @@ TEST_F(LocalOptimizationTest, DelayReleaseLocalLockHandlesReserveModes)
     EXPECT_EQ(lock_->delay_release_local_lock(*local_lock, UB_LOCK_X, loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(local_lock->local_is_reserve_lock.load(), UB_LOCK_I);
     EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR);
-    unregister_local_lock(shm_);
 }
 
 TEST_F(LocalOptimizationTest, DelayReleaseUbLockNoOwnerOrSlot)
