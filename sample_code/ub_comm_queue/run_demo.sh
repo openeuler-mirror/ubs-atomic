@@ -27,8 +27,8 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." >/dev/null 2>&1 && pwd)"
 MSG_SIZE=64
 CPU_ID_A=4
 CPU_ID_B=200
-SENDER_SHM="shm_node0_export"
-RECEIVER_SHM="shm_node1_export"
+NODE0_SHM="shm_node0_export"
+NODE1_SHM="shm_node1_export"
 REMOTE_B=""          # 远端 Node B 的 SSH 地址，空表示不自动启动
 DEMO_BIN="${SCRIPT_DIR}/demo_interactive"
 REMOTE_DEMO_PATH=""  # 远端 demo_interactive 路径，空则使用同路径
@@ -102,8 +102,8 @@ print_usage() {
     echo "  --msg-size <bytes>      消息大小 (64|4096|8192, 默认 64)"
     echo "  --cpu-id-a <N>          本机 Node A 的 CPU ID (默认 4)"
     echo "  --cpu-id-b <N>          对端 Node B 的 CPU ID (默认 200)"
-    echo "  --sender-shm <name>     发送端共享内存名 (默认 shm_node0_export)"
-    echo "  --receiver-shm <name>   接收端共享内存名 (默认 shm_node1_export)"
+    echo "  --node0-shm <name>      Node 0 共享内存名 (默认 shm_node0_export)"
+    echo "  --node1-shm <name>      Node 1 共享内存名 (默认 shm_node1_export)"
     echo "  --remote-b <user@host>  远端 Node B 的 SSH 地址"
     echo "  --remote-path <path>    远端 demo_interactive 的路径 (默认与本地同路径)"
     echo "  -h, --help              显示帮助"
@@ -133,10 +133,10 @@ parse_args() {
                 CPU_ID_A="$2"; shift 2 ;;
             --cpu-id-b)
                 CPU_ID_B="$2"; shift 2 ;;
-            --sender-shm)
-                SENDER_SHM="$2"; shift 2 ;;
-            --receiver-shm)
-                RECEIVER_SHM="$2"; shift 2 ;;
+            --node0-shm)
+                NODE0_SHM="$2"; shift 2 ;;
+            --node1-shm)
+                NODE1_SHM="$2"; shift 2 ;;
             --remote-b)
                 REMOTE_B="$2"; shift 2 ;;
             --remote-path)
@@ -205,8 +205,8 @@ start_remote_node_b() {
     ssh "$REMOTE_B" "nohup ${remote_path} --role B \
         --msg-size ${MSG_SIZE} \
         --cpu-id ${CPU_ID_B} \
-        -s ${SENDER_SHM} \
-        -r ${RECEIVER_SHM} \
+        -0 ${NODE0_SHM} \
+        -1 ${NODE1_SHM} \
         > /tmp/ub_demo_nodeb.log 2>&1 & echo \$!" | {
         read pid
         if [ -n "$pid" ]; then
@@ -231,8 +231,8 @@ start_node_a() {
     ${DEMO_BIN} --role A \
         --msg-size ${MSG_SIZE} \
         --cpu-id ${CPU_ID_A} \
-        -s ${SENDER_SHM} \
-        -r ${RECEIVER_SHM}
+        -0 ${NODE0_SHM} \
+        -1 ${NODE1_SHM}
 
     echo ""
     echo -e "${CYAN}===========================================================${NC}"
@@ -248,7 +248,9 @@ print_manual_b_instructions() {
     echo ""
     echo -e "  ${GREEN}./demo_interactive --role B \\${NC}"
     echo -e "  ${GREEN}    --msg-size ${MSG_SIZE} \\${NC}"
-    echo -e "  ${GREEN}    --cpu-id ${CPU_ID_B}${NC}"
+    echo -e "  ${GREEN}    --cpu-id ${CPU_ID_B} \\${NC}"
+    echo -e "  ${GREEN}    -0 ${NODE0_SHM} \\${NC}"
+    echo -e "  ${GREEN}    -1 ${NODE1_SHM}${NC}"
     echo ""
     echo -e "  ${CYAN}或者使用 --remote-b 自动启动:${NC}"
     echo -e "  ${CYAN}./run_demo.sh --remote-b <user@host>${NC}"
@@ -267,8 +269,8 @@ echo "  对端角色    = Node B"
 echo "  msg_size    = ${MSG_SIZE} bytes"
 echo "  cpu_id (A)  = ${CPU_ID_A}"
 echo "  cpu_id (B)  = ${CPU_ID_B}"
-echo "  sender_shm  = ${SENDER_SHM}"
-echo "  receiver_shm= ${RECEIVER_SHM}"
+echo "  node0_shm   = ${NODE0_SHM}"
+echo "  node1_shm   = ${NODE1_SHM}"
 if [ -n "$REMOTE_B" ]; then
     echo "  远端 Node B = ${REMOTE_B}"
 fi

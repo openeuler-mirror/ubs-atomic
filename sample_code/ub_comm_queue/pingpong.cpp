@@ -14,8 +14,14 @@
  *   -d <N>             打印前 N 条详情 (A 角色，默认 20)
  *   -w <N>             丢弃前 N 条预热样本 (A 角色，默认 1)
  *   -i <us>            每条消息间隔微秒 (A 角色，默认 0)
- *   -s <shm_name>      发送端共享内存名 (默认 shm_node0_export)
- *   -r <shm_name>      接收端共享内存名 (默认 shm_node1_export)
+ *   -0 <shm_name>      Node 0 共享内存名 (默认 shm_node0_export)
+ *   -1 <shm_name>      Node 1 共享内存名 (默认 shm_node1_export)
+ *
+ * 共享内存布局:
+ *   Node 0 共享内存 (-0): init_area + ring_A
+ *   Node 1 共享内存 (-1): ring_B
+ *   两个节点必须映射同一组共享内存 (名字相同),
+ *   由 --role 决定自身是哪个节点。
  *   -h                 显示帮助
  */
 
@@ -108,8 +114,8 @@ static size_t   g_msg_size         = 64;   // 消息总长度 (含消息头)
 static uint64_t NodeA              = 0;
 static uint64_t NodeB              = 1;
 
-static char     kSenderShmName[64]   = "shm_node0_export";
-static char     kReceiverShmName[64] = "shm_node1_export";
+static char     kNode0ShmName[64]   = "shm_node0_export";  // Node 0 共享内存 (含 init_area + ring_A)
+static char     kNode1ShmName[64]   = "shm_node1_export";  // Node 1 共享内存 (含 ring_B)
 
 // A 角色参数
 static uint64_t g_msg_count        = 10000;
@@ -364,8 +370,8 @@ static void print_help(const char* prog) {
     printf("Common options:\n");
     printf("  --cpu-id <N>       绑定 CPU ID (A 默认 4, B 默认 200)\n");
     printf("  --msg-size <bytes> 消息总长度含消息头 (支持: 64, 4096, 8192，默认 64)\n");
-    printf("  -s <shm_name>      发送端共享内存名 (默认 shm_node0_export)\n");
-    printf("  -r <shm_name>      接收端共享内存名 (默认 shm_node1_export)\n");
+    printf("  -0 <shm_name>      Node 0 共享内存名 (默认 shm_node0_export)\n");
+    printf("  -1 <shm_name>      Node 1 共享内存名 (默认 shm_node1_export)\n");
     printf("  -h                 显示帮助\n");
     printf("\n");
     printf("Role A (ping) options:\n");
@@ -395,7 +401,7 @@ int main(int argc, char* argv[]) {
 
     int opt;
     int long_index = 0;
-    while ((opt = getopt_long(argc, argv, "n:t:d:w:i:s:r:h", long_options, &long_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "n:t:d:w:i:0:1:h", long_options, &long_index)) != -1) {
         switch (opt) {
             case 'R': // --role
                 if (strcmp(optarg, "A") == 0) {
@@ -422,8 +428,8 @@ int main(int argc, char* argv[]) {
             case 'd': g_print_detail_num = atoi(optarg); break;
             case 'w': g_warmup_drop = atoi(optarg); break;
             case 'i': g_interval_us = atoi(optarg); break;
-            case 's': strncpy(kSenderShmName, optarg, sizeof(kSenderShmName) - 1); break;
-            case 'r': strncpy(kReceiverShmName, optarg, sizeof(kReceiverShmName) - 1); break;
+            case '0': strncpy(kNode0ShmName, optarg, sizeof(kNode0ShmName) - 1); break;
+            case '1': strncpy(kNode1ShmName, optarg, sizeof(kNode1ShmName) - 1); break;
             case 'h': print_help(argv[0]); return 0;
             default:  print_help(argv[0]); return -1;
         }
@@ -472,7 +478,7 @@ int main(int argc, char* argv[]) {
     printf("===== Role %s =====\n", role_str);
     printf("cpu_id=%d msg_size=%zu body_length=%u\n",
            g_cpu_id, g_msg_size, body_length_from_msg_size(g_msg_size));
-    printf("sender_shm=%s  receiver_shm=%s\n", kSenderShmName, kReceiverShmName);
+    printf("node0_shm=%s  node1_shm=%s\n", kNode0ShmName, kNode1ShmName);
 
     if (g_role == ROLE_A) {
         printf("msg_count=%" PRIu64 " threads=%d detailN=%d warmup_drop=%d interval_us=%d\n",
@@ -485,11 +491,11 @@ int main(int argc, char* argv[]) {
 
     if (init_ub_shm() != 0) return -1;
 
-    void *sender_shm_base = nullptr;
-    if (map_ub_shm(kSenderShmName, sender_shm_base) != 0) return -1;
+    void *node0_shm_base = nullptr;
+    if (map_ub_shm(kNode0ShmName, node0_shm_base) != 0) return -1;
 
-    void *receiver_shm_base = nullptr;
-    if (map_ub_shm(kReceiverShmName, receiver_shm_base) != 0) return -1;
+    void *node1_shm_base = nullptr;
+    if (map_ub_shm(kNode1ShmName, node1_shm_base) != 0) return -1;
 
     // ===================== 初始化通信队列 =====================
 
@@ -503,9 +509,9 @@ int main(int argc, char* argv[]) {
     const size_t min_ring_size = 1900800;
     const size_t ring_size = std::max(min_ring_size, RING_CAPACITY * g_msg_size * 2);
 
-    void* init_area   = sender_shm_base;
-    void* ring_area_A = (char*)sender_shm_base + init_size;
-    void* ring_area_B = (char*)receiver_shm_base;
+    void* init_area   = node0_shm_base;
+    void* ring_area_A = (char*)node0_shm_base + init_size;
+    void* ring_area_B = (char*)node1_shm_base;
 
     // max_msg_size 设置为 g_msg_size，确保能容纳完整的消息 (header + body)
     ub_ring_desc_t ring_desc = {static_cast<uint32_t>(RING_CAPACITY),

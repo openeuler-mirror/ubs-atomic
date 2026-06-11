@@ -9,8 +9,14 @@
  *   --role A|B         运行角色 (必选)
  *   --cpu-id <N>       绑定 CPU ID (A 默认 4, B 默认 200)
  *   --msg-size <bytes> 消息总长度含消息头 (支持: 64, 4096, 8192，默认 64)
- *   -s <shm_name>      发送端共享内存名
- *   -r <shm_name>      接收端共享内存名
+ *   -0 <shm_name>      Node 0 共享内存名 (默认 shm_node0_export)
+ *   -1 <shm_name>      Node 1 共享内存名 (默认 shm_node1_export)
+ *
+ * 共享内存布局:
+ *   Node 0 共享内存 (-0): init_area + ring_A
+ *   Node 1 共享内存 (-1): ring_B
+ *   两个节点必须映射同一组共享内存 (名字相同),
+ *   由 --role 决定自身是哪个节点。
  */
 
 #include <stdio.h>
@@ -28,6 +34,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <errno.h>
+#include <signal.h>
 #include <sys/ipc.h>
 #include <sys/mman.h>
 #include <sys/shm.h>
@@ -80,8 +87,8 @@ static int      g_cpu_id       = -1;
 static size_t   g_msg_size     = 64;
 static uint64_t NodeA          = 0;
 static uint64_t NodeB          = 1;
-static char     kSenderShmName[64]   = "shm_node0_export";
-static char     kReceiverShmName[64] = "shm_node1_export";
+static char     kNode0ShmName[64]   = "shm_node0_export";  // Node 0 共享内存 (含 init_area + ring_A)
+static char     kNode1ShmName[64]   = "shm_node1_export";  // Node 1 共享内存 (含 ring_B)
 static unsigned long g_shm_size_mb   = 1024;
 static ub_shm_comm_t g_handle        = nullptr;
 static ub_shm_comm_t* g_handlep      = &g_handle;
@@ -791,16 +798,22 @@ static void run_echo_server() {
     printf("  注册回调: MSG_ECHO_REQ, MSG_CUSTOM_DEMO, MSG_CONCURRENT, MSG_FLOW_CTRL\n");
     printf("  等待消息中... (Ctrl+C 退出)\n\n");
 
-    while (true) {
-        std::this_thread::sleep_for(2s);
-        auto echo = g_b_echo_sent.load();
+    // 安装 SIGUSR1 处理：按需打印统计
+    struct sigaction sa{};
+    sa.sa_handler = [](int) {
+        auto echo  = g_b_echo_sent.load();
         auto custom = g_b_custom_sent.load();
-        auto conc = g_b_concurrent_resp.load();
-        auto flow = g_flow_recv_count.load();
-        if (echo + custom + conc + flow > 0) {
-            printf("  [B 统计] echo=%lu custom=%lu concurrent_resp=%lu flow_ctrl=%lu\n",
-                   echo, custom, conc, flow);
-        }
+        auto conc  = g_b_concurrent_resp.load();
+        auto flow  = g_flow_recv_count.load();
+        printf("  [B 统计] echo=%lu custom=%lu concurrent_resp=%lu flow_ctrl=%lu\n",
+               echo, custom, conc, flow);
+    };
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGUSR1, &sa, nullptr);
+
+    while (true) {
+        std::this_thread::sleep_for(60s);
     }
 }
 
@@ -835,8 +848,8 @@ static void print_help(const char* prog) {
     printf("Common options:\n");
     printf("  --cpu-id <N>       绑定 CPU ID (A 默认 4, B 默认 200)\n");
     printf("  --msg-size <bytes> 消息总长度含消息头 (支持: 64, 4096, 8192，默认 64)\n");
-    printf("  -s <shm_name>      发送端共享内存名 (默认 shm_node0_export)\n");
-    printf("  -r <shm_name>      接收端共享内存名 (默认 shm_node1_export)\n");
+    printf("  -0 <shm_name>      Node 0 共享内存名 (默认 shm_node0_export)\n");
+    printf("  -1 <shm_name>      Node 1 共享内存名 (默认 shm_node1_export)\n");
     printf("  -h                 显示帮助\n");
 }
 
@@ -856,7 +869,7 @@ int main(int argc, char* argv[]) {
 
     int opt;
     int long_index = 0;
-    while ((opt = getopt_long(argc, argv, "s:r:h", long_options, &long_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "0:1:h", long_options, &long_index)) != -1) {
         switch (opt) {
             case 'R':
                 if (strcmp(optarg, "A") == 0) g_role = ROLE_A;
@@ -866,8 +879,8 @@ int main(int argc, char* argv[]) {
                 break;
             case 'C': g_cpu_id = atoi(optarg); break;
             case 'M': g_msg_size = strtoull(optarg, nullptr, 10); break;
-            case 's': strncpy(kSenderShmName, optarg, sizeof(kSenderShmName) - 1); break;
-            case 'r': strncpy(kReceiverShmName, optarg, sizeof(kReceiverShmName) - 1); break;
+            case '0': strncpy(kNode0ShmName, optarg, sizeof(kNode0ShmName) - 1); break;
+            case '1': strncpy(kNode1ShmName, optarg, sizeof(kNode1ShmName) - 1); break;
             case 'h': print_help(argv[0]); return 0;
             default:  print_help(argv[0]); return -1;
         }
@@ -893,19 +906,19 @@ int main(int argc, char* argv[]) {
     // 初始化共享内存
     if (init_ub_shm() != 0) return -1;
 
-    void *sender_shm_base = nullptr;
-    if (map_ub_shm(kSenderShmName, sender_shm_base) != 0) return -1;
-    void *receiver_shm_base = nullptr;
-    if (map_ub_shm(kReceiverShmName, receiver_shm_base) != 0) return -1;
+    void *node0_shm_base = nullptr;
+    if (map_ub_shm(kNode0ShmName, node0_shm_base) != 0) return -1;
+    void *node1_shm_base = nullptr;
+    if (map_ub_shm(kNode1ShmName, node1_shm_base) != 0) return -1;
 
     // 初始化通信队列
     const size_t init_size = 1024 * 1024;
     const size_t min_ring_size = 1900800;
     const size_t ring_size = std::max(min_ring_size, RING_CAPACITY * g_msg_size * 2);
 
-    void* init_area   = sender_shm_base;
-    void* ring_area_A = (char*)sender_shm_base + init_size;
-    void* ring_area_B = (char*)receiver_shm_base;
+    void* init_area   = node0_shm_base;
+    void* ring_area_A = (char*)node0_shm_base + init_size;
+    void* ring_area_B = (char*)node1_shm_base;
 
     ub_ring_desc_t ring_desc = {static_cast<uint32_t>(RING_CAPACITY),
                                 static_cast<uint32_t>(g_msg_size), 1};
