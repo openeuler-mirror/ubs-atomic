@@ -412,7 +412,13 @@ int MPSCRingBuffer::enqueue_local(const void *hdr, const void *body, uint32_t bo
 {
     uint32_t total_len = MSG_HEADER_LEN + body_len;
 
-    // 1. 检查大小 (本地读取，极快)
+    // 1. 参数校验
+    if (__builtin_expect(hdr == nullptr, 0))
+        return -EINVAL;
+    if (__builtin_expect(body_len > 0 && body == nullptr, 0))
+        return -EINVAL;
+
+    // 2. 检查大小 (本地读取，极快)
     if (__builtin_expect(total_len > max_msg_size_, 0))
         return -EMSGSIZE;
 
@@ -475,6 +481,13 @@ int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr,
                                    std::atomic<uint64_t> &cached_threshold_version)
 {
     // 0. [Local] 参数检查
+    if (__builtin_expect(remote_this == nullptr, 0))
+        return -EINVAL;
+    if (__builtin_expect(hdr == nullptr, 0))
+        return -EINVAL;
+    if (__builtin_expect(body_len > 0 && body == nullptr, 0))
+        return -EINVAL;
+
     uint32_t total_len = MSG_HEADER_LEN + body_len;
     if (__builtin_expect(total_len > max_size, 0))
         return -EMSGSIZE;
