@@ -518,7 +518,8 @@ int UBShmTransport::create_local_rings(std::vector<uint64_t> &out_offsets)
 
     // 校验 out_offsets 大小
     if (out_offsets.size() < MAX_PRIORITY_LEVELS) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR, "out_offsets size %zu less than required %u", out_offsets.size(), MAX_PRIORITY_LEVELS);
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "out_offsets size %zu less than required %u", out_offsets.size(),
+                   MAX_PRIORITY_LEVELS);
         return -EINVAL;
     }
 
@@ -996,11 +997,11 @@ int UBShmTransport::send(const message_t *msg)
         return -EINVAL;
     }
     if (__builtin_expect(dest_id >= MAX_NODES_LIMIT, 0)) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Invalid destination node id %u (limit: %u)", dest_id, MAX_NODES_LIMIT);
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Invalid destination node id %u (limit: %u)", dest_id,
+                   MAX_NODES_LIMIT);
         return -EINVAL;
     }
-    if (__builtin_expect(dest_id != conf_.current_node_id &&
-                             !peer_alive_[dest_id].load(std::memory_order_acquire),
+    if (__builtin_expect(dest_id != conf_.current_node_id && !peer_alive_[dest_id].load(std::memory_order_acquire),
                          0)) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: destination consumer heartbeat timeout, node=%u", dest_id);
         return UB_COMM_ERR_PEER_NOT_READY;
