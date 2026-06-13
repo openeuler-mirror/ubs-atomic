@@ -6,14 +6,135 @@
 
 namespace ublock {
 
+namespace {
+
+inline bool local_lock_state_is_idle(uint64_t state)
+{
+    return state == 0;
+}
+
+// Keep acquire helpers single-attempt: LocalLock::lock_* owns spin rounds,
+// deadline checks and queue fallback.
+bool local_lock_try_acquire_s(LocalLockStateWord &state_word, int32_t tid)
+{
+    const uint32_t lane = local_lock_lane_for_tid(tid);
+    const uint64_t state = state_word.load(std::memory_order_acquire);
+    if ((state & LOCAL_LOCK_X_FLAG) != 0) {
+        return false;
+    }
+
+    uint16_t lane_value = local_lock_lane_value(state, lane);
+    if ((lane_value & LOCAL_LOCK_READER_SENTINEL) != 0) {
+        return false;
+    }
+
+    const uint16_t count = static_cast<uint16_t>(lane_value & LOCAL_LOCK_READER_COUNT_MASK);
+    if (count == LOCAL_LOCK_READER_COUNT_MASK) {
+        return false;
+    }
+
+    const uint16_t desired =
+        static_cast<uint16_t>((lane_value & ~static_cast<uint16_t>(LOCAL_LOCK_READER_COUNT_MASK)) | (count + 1u));
+    return state_word.compare_exchange_lane_weak(lane, lane_value, desired, std::memory_order_acquire,
+                                                 std::memory_order_acquire);
+}
+
+bool local_lock_try_release_s(LocalLockStateWord &state_word, int32_t tid, uint64_t &state_after_release)
+{
+    const uint32_t lane = local_lock_lane_for_tid(tid);
+    const uint64_t state = state_word.load(std::memory_order_acquire);
+    uint16_t lane_value = local_lock_lane_value(state, lane);
+
+    // Unlock cannot be abandoned; retry only the owning reader lane.
+    while ((lane_value & LOCAL_LOCK_READER_SENTINEL) == 0) {
+        const uint16_t count = static_cast<uint16_t>(lane_value & LOCAL_LOCK_READER_COUNT_MASK);
+        if (count == 0) {
+            return false;
+        }
+
+        const uint16_t desired =
+            static_cast<uint16_t>((lane_value & ~static_cast<uint16_t>(LOCAL_LOCK_READER_COUNT_MASK)) | (count - 1u));
+        if (state_word.compare_exchange_lane_strong(lane, lane_value, desired, std::memory_order_acq_rel,
+                                                    std::memory_order_acquire)) {
+            state_after_release = state_word.load(std::memory_order_acquire);
+            return true;
+        }
+        cpu_relax();
+    }
+    return false;
+}
+
+bool local_lock_try_acquire_x(LocalLockStateWord &state_word)
+{
+    uint64_t state = state_word.load(std::memory_order_acquire);
+    if (!local_lock_state_is_idle(state)) {
+        return false;
+    }
+    return state_word.compare_exchange_weak(state, LOCAL_LOCK_X_STATE, std::memory_order_acq_rel,
+                                            std::memory_order_acquire);
+}
+
+bool local_lock_try_acquire_sx(LocalLockStateWord &state_word)
+{
+    const uint64_t state = state_word.load(std::memory_order_acquire);
+    if ((state & (LOCAL_LOCK_SX_FLAG | LOCAL_LOCK_X_FLAG | LOCAL_LOCK_READER_SENTINEL_MASK)) != 0) {
+        return false;
+    }
+
+    uint16_t lane_value = local_lock_lane_value(state, LOCAL_LOCK_SX_LANE);
+    if ((lane_value & (LOCAL_LOCK_SX_FLAG | LOCAL_LOCK_READER_SENTINEL)) != 0) {
+        return false;
+    }
+
+    const uint16_t desired = static_cast<uint16_t>(lane_value | LOCAL_LOCK_SX_FLAG);
+    return state_word.compare_exchange_lane_weak(LOCAL_LOCK_SX_LANE, lane_value, desired, std::memory_order_acq_rel,
+                                                 std::memory_order_acquire);
+}
+
+bool local_lock_try_release_sx(LocalLockStateWord &state_word, uint64_t &state_after_release)
+{
+    const uint16_t clear_sx_mask = static_cast<uint16_t>(~static_cast<uint16_t>(LOCAL_LOCK_SX_FLAG));
+    const uint16_t old_lane = state_word.fetch_and_lane(LOCAL_LOCK_SX_LANE, clear_sx_mask, std::memory_order_acq_rel);
+    if ((old_lane & LOCAL_LOCK_SX_FLAG) == 0) {
+        return false;
+    }
+
+    state_after_release = state_word.load(std::memory_order_acquire);
+    return true;
+}
+
+ub_lock_result_t finish_local_sx_acquire(LocalLock &lock, bool is_awakened, uint32_t slot, int32_t tid)
+{
+    lock.lock_sx_owner.store(tid, std::memory_order_release);
+    lock.sx_recursive_.store(1, std::memory_order_release);
+    if (is_awakened) {
+        lock.clean_outqueue_waiter(slot);
+    }
+    return UB_LOCK_SUCCESS;
+}
+
+ub_lock_result_t enqueue_sx_waiter_if_needed(LocalLock &lock, bool is_awakened, int32_t tid, uint32_t &slot)
+{
+    if (is_awakened) {
+        return UB_LOCK_SUCCESS;
+    }
+    ub_lock_result_t ret = lock.enqueue_waiter(UB_LOCK_SX, tid, slot);
+    if (ret != UB_LOCK_SUCCESS) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); // 队列满
+    }
+    return ret;
+}
+
+} // namespace
+
 /*
     本地锁的实现
 */
 
 void LocalLock::init_()
 {
-    lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
-    read_count.store(0, std::memory_order_release);
+    lock_word.store(0, std::memory_order_release);
+    read_count.store(0, std::memory_order_relaxed);
     waiting_count.store(0, std::memory_order_release);
 
     lock_x_owner.store(0, std::memory_order_release);
@@ -43,9 +164,7 @@ void LocalLock::end_remote_release()
 
 bool LocalLock::is_held()
 {
-    if (lock_word.v.load(std::memory_order_acquire) != X_LOCK_DECR)
-        return true;
-    return false;
+    return !local_lock_state_is_idle(lock_word.load(std::memory_order_acquire));
 }
 /* ---------------- queue: std array实现FIFO---------------- */
 void LocalLock::create_wait_queue()
@@ -181,16 +300,14 @@ ub_lock_result_t LocalLock::lock_s(int32_t tid, steady_time_point deadline)
         for (uint32_t i = 0; i < SPIN_WAIT_ROUNDS; ++i) {
             if (waiting_count.load(std::memory_order_acquire) > 0 && !is_awakened)
                 break;
-            if (read_count.load(std::memory_order_acquire) > LOCK_S_THRESHOLD && !is_awakened) {
+            if (read_count.load(std::memory_order_relaxed) > LOCK_S_THRESHOLD && !is_awakened) {
                 if (ub_lock_ptr_->waiting_count.load(std::memory_order_acquire) > 0) { // 入本地队列等待
                     break;
                 }
-                read_count.store(0, std::memory_order_release);
+                read_count.store(0, std::memory_order_relaxed);
             }
-            int32_t cur = lock_word.v.load(std::memory_order_acquire);
-            if (cur > 0 &&
-                lock_word.v.compare_exchange_weak(cur, cur - 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                read_count.fetch_add(1, std::memory_order_acq_rel);
+            if (local_lock_try_acquire_s(lock_word, tid)) {
+                read_count.fetch_add(1, std::memory_order_relaxed);
                 if (is_awakened) {
                     clean_outqueue_waiter(slot);
                 }
@@ -216,13 +333,13 @@ ub_lock_result_t LocalLock::lock_s(int32_t tid, steady_time_point deadline)
             WaiterGuard guard(tid, &ctx);
             ret = enqueue_waiter(UB_LOCK_S, tid, slot);
             if (ret != UB_LOCK_SUCCESS) {
-                ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); //队列满
+                ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); // 队列满
                 return ret;
             }
             // double check 自我唤醒
             bool self_handoff = false;
-            int32_t current_val = lock_word.v.load(std::memory_order_acquire);
-            if (current_val == X_LOCK_DECR) { // 锁完全空闲条件
+            uint64_t current_val = lock_word.load(std::memory_order_acquire);
+            if (local_lock_state_is_idle(current_val)) { // 锁完全空闲条件
                 self_handoff = ring_queue_try_self_handoff_if_head<UB_MAX_CAPACITY>(q_head.v, q_tail.v, q.data(), slot);
             }
             // 睡眠等待 防止无限循环
@@ -255,9 +372,7 @@ ub_lock_result_t LocalLock::lock_x(bool allow_recursive, int32_t tid, steady_tim
         for (uint32_t i = 0; i < SPIN_WAIT_ROUNDS; ++i) {
             if (waiting_count.load(std::memory_order_acquire) > 0 && !is_awakened)
                 break;
-            int32_t cur = lock_word.v.load(std::memory_order_acquire);
-            if (cur == X_LOCK_DECR &&
-                lock_word.v.compare_exchange_weak(cur, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (local_lock_try_acquire_x(lock_word)) {
                 lock_x_owner.store(tid, std::memory_order_release);
                 x_recursive_.store(1, std::memory_order_release);
                 if (is_awakened) {
@@ -289,8 +404,8 @@ ub_lock_result_t LocalLock::lock_x(bool allow_recursive, int32_t tid, steady_tim
             }
             // double check 自我唤醒
             bool self_handoff = false;
-            int32_t current_val = lock_word.v.load(std::memory_order_acquire);
-            if (current_val == X_LOCK_DECR) { // 锁完全空闲条件
+            uint64_t current_val = lock_word.load(std::memory_order_acquire);
+            if (local_lock_state_is_idle(current_val)) { // 锁完全空闲条件
                 self_handoff = ring_queue_try_self_handoff_if_head<UB_MAX_CAPACITY>(q_head.v, q_tail.v, q.data(), slot);
             }
             // 睡眠等待 防止无限循环
@@ -324,75 +439,55 @@ ub_lock_result_t LocalLock::lock_sx(bool allow_recursive, int32_t tid, steady_ti
         for (uint32_t i = 0; i < SPIN_WAIT_ROUNDS; ++i) {
             if (waiting_count.load(std::memory_order_acquire) > 0 && !is_awakened)
                 break;
-            int32_t cur = lock_word.v.load(std::memory_order_acquire);
-            if (cur > X_LOCK_HALF_DECR) {
-                int32_t next = cur - X_LOCK_HALF_DECR;
-                if (lock_word.v.compare_exchange_weak(cur, next, std::memory_order_acq_rel,
-                                                      std::memory_order_acquire)) {
-                    lock_sx_owner.store(tid, std::memory_order_release);
-                    sx_recursive_.store(1, std::memory_order_release);
-                    if (is_awakened) {
-                        clean_outqueue_waiter(slot);
-                    }
-                    return UB_LOCK_SUCCESS;
-                }
+            if (local_lock_try_acquire_sx(lock_word)) {
+                return finish_local_sx_acquire(*this, is_awakened, slot, tid);
             }
-            if (is_awakened) {
+            if (!is_awakened && (i & 0xF) == 0) {
                 cpu_relax();
-                --i;
-                if (std::chrono::steady_clock::now() > deadline) {
-                    clean_timeout_waiter(slot);
-                    ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
-                    return UB_LOCK_TIMEOUT;
-                }
+            }
+            if (!is_awakened) {
                 continue;
             }
-            if ((i & 0xF) == 0) {
-                cpu_relax();
+            cpu_relax();
+            --i;
+            if (std::chrono::steady_clock::now() > deadline) {
+                clean_timeout_waiter(slot);
+                ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
+                return UB_LOCK_TIMEOUT;
             }
         }
-        {
-            local_wait_ctx_t ctx;
-            WaiterGuard guard(tid, &ctx);
-            if (!is_awakened) {
-                ret = enqueue_waiter(UB_LOCK_SX, tid, slot);
-                if (ret != UB_LOCK_SUCCESS) {
-                    ATOMIC_LOG(LOG_LEVEL_ERROR, "The local waiting queue is full"); //队列满
-                    return ret;
-                }
-            }
-            bool self_handoff = false;
-            int32_t current_val = lock_word.v.load(std::memory_order_acquire);
-            if (current_val == X_LOCK_DECR) { // 锁完全空闲条件
-                self_handoff = ring_queue_try_self_handoff_if_head<UB_MAX_CAPACITY>(q_head.v, q_tail.v, q.data(), slot);
-            }
-            // 睡眠等待 防止无限循环
-            if (!self_handoff) {
-                // 睡眠等待 防止无限循环
-                if (!ctx.wait(deadline)) {
-                    clean_timeout_waiter(slot);
-                    ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
-                    return UB_LOCK_TIMEOUT;
-                }
-            }
-            is_awakened = true;
+        local_wait_ctx_t ctx;
+        WaiterGuard guard(tid, &ctx);
+        ret = enqueue_sx_waiter_if_needed(*this, is_awakened, tid, slot);
+        if (ret != UB_LOCK_SUCCESS) {
+            return ret;
         }
+        bool self_handoff = false;
+        uint64_t current_val = lock_word.load(std::memory_order_acquire);
+        if (local_lock_state_is_idle(current_val)) { // 锁完全空闲条件
+            self_handoff = ring_queue_try_self_handoff_if_head<UB_MAX_CAPACITY>(q_head.v, q_tail.v, q.data(), slot);
+        }
+        // 睡眠等待 防止无限循环
+        if (!self_handoff && !ctx.wait(deadline)) {
+            clean_timeout_waiter(slot);
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "The local lock hold timeout");
+            return UB_LOCK_TIMEOUT;
+        }
+        is_awakened = true;
     }
 }
 
 /* ---------------- unlock ---------------- */
 
-ub_lock_result_t LocalLock::unlock_s()
+ub_lock_result_t LocalLock::unlock_s(int32_t tid)
 {
-    int32_t old = lock_word.v.fetch_add(1, std::memory_order_acq_rel);
-    int32_t now = old + 1;
-    if (now > X_LOCK_DECR) {
-        lock_word.v.fetch_sub(1, std::memory_order_acq_rel);
+    uint64_t state_after_release = 0;
+    if (!local_lock_try_release_s(lock_word, tid, state_after_release)) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Hold the lock before unlocking");
         return UB_LOCK_ERROR;
     }
     // 唤醒等待者（仅当最后一个读者释放）
-    if (now == X_LOCK_DECR && waiting_count.load(std::memory_order_acquire) > 0) {
+    if (local_lock_state_is_idle(state_after_release) && waiting_count.load(std::memory_order_acquire) > 0) {
         wake_after_unlock_exclusive();
     }
     return UB_LOCK_SUCCESS;
@@ -413,7 +508,7 @@ ub_lock_result_t LocalLock::unlock_x(bool allow_recursive, int32_t tid)
 
     x_recursive_.store(0, std::memory_order_release);
     lock_x_owner.store(0, std::memory_order_release);
-    lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_word.store(0, std::memory_order_release);
     if (waiting_count.load(std::memory_order_acquire) > 0) {
         wake_after_unlock_exclusive();
     }
@@ -436,10 +531,13 @@ ub_lock_result_t LocalLock::unlock_sx(bool allow_recursive, int32_t tid)
     sx_recursive_.store(0, std::memory_order_release);
     lock_sx_owner.store(0, std::memory_order_release);
 
-    int32_t old = lock_word.v.fetch_add(X_LOCK_HALF_DECR, std::memory_order_acq_rel);
-    int32_t now = old + X_LOCK_HALF_DECR;
+    uint64_t state_after_release = 0;
+    if (!local_lock_try_release_sx(lock_word, state_after_release)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Hold the lock before unlocking");
+        return UB_LOCK_ERROR;
+    }
     if (waiting_count.load(std::memory_order_acquire) > 0) {
-        if (now == X_LOCK_DECR) { // sx降级，仅当最后一个读者释放，唤醒队列的第一个
+        if (local_lock_state_is_idle(state_after_release)) { // sx降级，仅当最后一个读者释放，唤醒队列的第一个
             wake_after_unlock_exclusive();
         } else {
             // 等待队列中第一个必须为SX才唤醒

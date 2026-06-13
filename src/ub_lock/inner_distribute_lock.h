@@ -1,6 +1,14 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
-*/
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+
+ * rmrs is licensed under the Mulan PSL v2.
+ * You can use this software according to the terms and conditions of the Mulan PSL v2.
+ * You may obtain a copy of Mulan PSL v2 at:
+ *      http://license.coscl.org.cn/MulanPSL2
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+ * See the Mulan PSL v2 for more details.
+ */
 
 #pragma once
 
@@ -74,7 +82,7 @@ private:
     void clean_timeout_waiter(uint32_t ticket); // 清理等待队列中已经超时的 waiter
     void clean_outqueue_waiter(uint32_t ticket);
     void recover_shared_lock(uint32_t process_id);
-    void cleanup_and_unlock_local(LocalLock *local_lock);
+    void cleanup_and_unlock_local(LocalLock *local_lock, int32_t tid);
     bool peek_head_waiting_mode_clean(ub_lock_mode_t &mode_out);
 
     // 消息管理
@@ -93,6 +101,8 @@ private:
     void dump_timeout_holder_info(const ub_location_t &location, ub_lock_mode_t request_mode, LocalLock *local_lock,
                                   const char *reason);
     bool wait_follower_s(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline);
+    ub_lock_result_t wait_or_claim_global_s(const ub_location_t &location, LocalLock *local_lock,
+                                            const steady_time_point &deadline, bool &became_leader);
     ub_lock_result_t spin_wait_s_loop(const ub_location_t &location, LocalLock *local_lock,
                                       const steady_time_point &deadline);
     ub_lock_result_t spin_wait_x_loop(const ub_location_t &location, LocalLock *local_lock,
