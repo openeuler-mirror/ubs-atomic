@@ -152,6 +152,13 @@ void on_peer_exit(const message_t *msg, void *ctx)
     }
     UBShmTransport *self = (UBShmTransport *)ctx;
     uint32_t dead_node = msg->header.src_node_id;
+
+    if (dead_node >= MAX_NODES_LIMIT) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "on_peer_exit: node_id %u out of range [0, %u), ignoring.", dead_node,
+                   MAX_NODES_LIMIT);
+        return;
+    }
+
     ATOMIC_LOG(LOG_LEVEL_WARN, "Peer %u went down. Cleaning caches.", dead_node);
     self->remove_node_cache(dead_node);
 }
@@ -1000,6 +1007,11 @@ int UBShmTransport::send(const message_t *msg)
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Invalid destination node id %u (limit: %u)", dest_id,
                    MAX_NODES_LIMIT);
         return -EINVAL;
+    }
+    if (__builtin_expect(dest_id != conf_.current_node_id && node_id_to_idx_.find(dest_id) == node_id_to_idx_.end(),
+                         0)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Unknown destination node %u", dest_id);
+        return UB_COMM_ERR_PEER_NODE_NOT_FOUND;
     }
     if (__builtin_expect(dest_id != conf_.current_node_id && !peer_alive_[dest_id].load(std::memory_order_acquire),
                          0)) {
