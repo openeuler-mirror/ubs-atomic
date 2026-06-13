@@ -2,8 +2,8 @@
  	 * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
  	 */
 
-#include <cstring>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <regex>
