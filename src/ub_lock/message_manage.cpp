@@ -3,6 +3,7 @@
  	 */
 
 #include <cstring>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <regex>
@@ -29,6 +30,32 @@ struct MessageDeleter {
 };
 using MessagePtr = std::unique_ptr<message_t, MessageDeleter>;
 std::once_flag g_register_msg_once_flag;
+
+static inline bool valid_node_id(uint8_t node_id)
+{
+    return node_id < UB_MAX_NODES;
+}
+
+std::shared_ptr<LocalLock> validate_release_lock_pointer(void *addr)
+{
+    if (addr == nullptr) {
+        ATOMIC_LOG(LOG_LEVEL_DEBUG, "UB RELEASE: ub lock is null.");
+        return nullptr;
+    }
+
+    ub_rw_lock_t *shm_lock = static_cast<ub_rw_lock_t *>(addr);
+    if ((reinterpret_cast<uintptr_t>(shm_lock) % UB_CACHELINE_SIZE) != 0u) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "UB RELEASE: misaligned lock pointer %p", shm_lock);
+        return nullptr;
+    }
+
+    std::shared_ptr<LocalLock> ll_sp = lookup_local_lock(shm_lock);
+    if (!ll_sp || ll_sp->ub_lock_ptr_ != shm_lock) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "UB RELEASE: unregistered lock pointer %p", shm_lock);
+        return nullptr;
+    }
+    return ll_sp;
+}
 } // namespace
 
 static inline void backoff_sleep(uint32_t attempt)
@@ -139,8 +166,13 @@ ub_lock_result_t DistributedLock::notify_unlock(const ub_location_t &location, u
 
 void message_process_thread_func(const message_t *msg, void *ptr)
 {
-    if (!msg || !msg->body || msg->header.body_length <= 0) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid message: msg is null or length is zero");
+    if (!msg || !msg->body || msg->header.body_length != sizeof(local_msg_body_t)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid message: msg is null or body length is invalid");
+        return;
+    }
+    if (!valid_node_id(msg->header.src_node_id) || !valid_node_id(msg->header.dest_node_id)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid message node id: src=%u dest=%u", msg->header.src_node_id,
+                   msg->header.dest_node_id);
         return;
     }
 
@@ -160,14 +192,9 @@ void message_process_thread_func(const message_t *msg, void *ptr)
         case UB_RELEASE: {
             // release
             ub_rw_lock_t *shm_lock = static_cast<ub_rw_lock_t *>(body.addr);
-            if (!shm_lock) {
-                ATOMIC_LOG(LOG_LEVEL_DEBUG, "UB RELEASE: ub lock is null.");
-                break;
-            }
-            std::shared_ptr<LocalLock> ll_sp = lookup_local_lock(shm_lock);
+            std::shared_ptr<LocalLock> ll_sp = validate_release_lock_pointer(body.addr);
             LocalLock *local_lock = ll_sp.get();
             if (!local_lock) {
-                ATOMIC_LOG(LOG_LEVEL_DEBUG, "UB RELEASE: local lock is null.");
                 break;
             }
 
