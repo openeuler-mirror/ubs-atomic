@@ -146,22 +146,41 @@ void on_flow_config_update(const message_t *msg, void *ctx)
 // 回调实现
 void on_peer_exit(const message_t *msg, void *ctx)
 {
+    if (msg == nullptr || ctx == nullptr) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid parameters for on_peer_exit");
+        return;
+    }
     UBShmTransport *self = (UBShmTransport *)ctx;
     uint32_t dead_node = msg->header.src_node_id;
+
+    if (dead_node >= MAX_NODES_LIMIT) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "on_peer_exit: node_id %u out of range [0, %u), ignoring.", dead_node,
+                   MAX_NODES_LIMIT);
+        return;
+    }
+
     ATOMIC_LOG(LOG_LEVEL_WARN, "Peer %u went down. Cleaning caches.", dead_node);
     self->remove_node_cache(dead_node);
 }
 
 void UBShmTransport::remove_node_cache(uint32_t node_id)
 {
+    // 参数校验
+    if (node_id >= MAX_NODES_LIMIT) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid node_id %u exceeds MAX_NODES_LIMIT", node_id);
+        return;
+    }
+    int32_t idx = get_compact_index(node_id);
+    if (idx < 0) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Failed to get compact index for node_id %u", node_id);
+        return;
+    }
+
     // 加写锁 (保护 ring_caches_ 的并发访问)
     std::unique_lock<std::shared_mutex> lock(cache_mutex_);
 
     for (int p = 0; p < MAX_PRIORITY_LEVELS; ++p) {
-        // TODO: ring_caches_ 这里仍然直接使用逻辑 node_id 作为数组下标。
-        // 如果后续要支持稀疏 node_id，需要统一收敛到 compact index，再整体调整这条访问链路。
         auto &cache = ring_caches_[node_id][p];
-        int32_t idx = get_compact_index(node_id);
         cache.raw_ptr = nullptr;
         cache.shadow_head.store(0, std::memory_order_relaxed);
         cache.cached_threshold.store(0, std::memory_order_relaxed);
@@ -176,6 +195,10 @@ void UBShmTransport::update_cached_congestion_threshold(uint32_t node_id, uint8_
 {
     if (priority == LOCK_RING_PRIORITY || priority >= MAX_PRIORITY_LEVELS) {
         ATOMIC_LOG(LOG_LEVEL_WARN, "Ignore invalid flow config update, node=%u priority=%u", node_id, priority);
+        return;
+    }
+    if (node_id >= MAX_NODES_LIMIT) {
+        ATOMIC_LOG(LOG_LEVEL_WARN, "Ignore flow config update: node_id %u exceeds MAX_NODES_LIMIT", node_id);
         return;
     }
     if (get_compact_index(node_id) < 0) {
@@ -500,6 +523,13 @@ int UBShmTransport::create_local_rings(std::vector<uint64_t> &out_offsets)
     // 初始化最大消息大小全局变量
     max_msg_size_global_ = 0;
 
+    // 校验 out_offsets 大小
+    if (out_offsets.size() < MAX_PRIORITY_LEVELS) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "out_offsets size %zu less than required %u", out_offsets.size(),
+                   MAX_PRIORITY_LEVELS);
+        return -EINVAL;
+    }
+
     auto align_addr = [&](char *&addr) {
         uintptr_t raw = reinterpret_cast<uintptr_t>(addr);
         size_t pad = (CACHELINE_SIZE - (raw % CACHELINE_SIZE)) % CACHELINE_SIZE;
@@ -603,6 +633,10 @@ int UBShmTransport::create_local_rings(std::vector<uint64_t> &out_offsets)
 int UBShmTransport::publish_to_billboard(const std::vector<uint64_t> &offsets)
 {
     // [基础检查]
+    if (init_region_ptr_ == nullptr) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Init region pointer is null!");
+        return -EINVAL;
+    }
     if ((uintptr_t)init_region_ptr_ % CACHELINE_SIZE != 0) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Init region must be 64-byte aligned!");
         return -EINVAL;
@@ -670,10 +704,15 @@ void UBShmTransport::wait_for_cluster_ready()
     const milliseconds kTimeout(10000);
     auto deadline = steady_clock::now() + kTimeout;
 
+    if (init_region_ptr_ == nullptr) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "wait_for_cluster_ready failed: init_region_ptr_ is nullptr");
+        return;
+    }
     Billboard *board = reinterpret_cast<Billboard *>(init_region_ptr_);
 
     // 遍历 idx (0 ~ N-1)
-    for (uint32_t idx = 0; idx < idx_to_node_id_.size(); ++idx) {
+    size_t max_idx = std::min(idx_to_node_id_.size(), static_cast<size_t>(MAX_NODES_LIMIT));
+    for (uint32_t idx = 0; idx < max_idx; ++idx) {
         uint32_t real_id = idx_to_node_id_[idx];
         if (real_id == conf_.current_node_id)
             continue;
@@ -706,7 +745,12 @@ void UBShmTransport::wait_for_cluster_ready()
 // 10. 预热
 void UBShmTransport::preload_remote_table()
 {
-    size_t num_nodes = idx_to_node_id_.size();
+    if (init_region_ptr_ == nullptr) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "preload_remote_table failed: init_region_ptr_ is nullptr");
+        return;
+    }
+
+    size_t num_nodes = std::min(idx_to_node_id_.size(), static_cast<size_t>(MAX_NODES_LIMIT));
     remote_lookup_table_.assign(num_nodes, std::vector<MPSCRingBuffer *>(MAX_PRIORITY_LEVELS, nullptr));
 
     Billboard *board = reinterpret_cast<Billboard *>(init_region_ptr_);
@@ -789,7 +833,8 @@ void UBShmTransport::run_producer_heartbeat_monitor()
     Billboard *board = reinterpret_cast<Billboard *>(init_region_ptr_);
     while (!reliability_stop_flag_.load(std::memory_order_relaxed)) {
         uint64_t now = steady_time_us();
-        for (uint32_t idx = 0; idx < idx_to_node_id_.size(); ++idx) {
+        size_t max_idx = std::min(idx_to_node_id_.size(), static_cast<size_t>(MAX_NODES_LIMIT));
+        for (uint32_t idx = 0; idx < max_idx; ++idx) {
             uint32_t node_id = idx_to_node_id_[idx];
             if (node_id == conf_.current_node_id || node_id >= MAX_NODES_LIMIT) {
                 continue;
@@ -888,6 +933,10 @@ int UBShmTransport::get_remote_ring(uint32_t node_id, uint32_t priority, MPSCRin
     ATOMIC_LOG(LOG_LEVEL_DEBUG, "Cache miss for Node %d Priority %d, try Billboard.", node_id, priority);
 
     // 2. 查 Billboard (Lazy Load)
+    if (init_region_ptr_ == nullptr) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Init region pointer is null!");
+        return -EINVAL;
+    }
     Billboard *board = reinterpret_cast<Billboard *>(init_region_ptr_);
 
     // 必须在此处重新刷缓存，防止读取陈旧的 NULL
@@ -954,8 +1003,17 @@ int UBShmTransport::send(const message_t *msg)
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Invalid priority %u", prio);
         return -EINVAL;
     }
-    if (__builtin_expect(dest_id != conf_.current_node_id && dest_id < MAX_NODES_LIMIT &&
-                             !peer_alive_[dest_id].load(std::memory_order_acquire),
+    if (__builtin_expect(dest_id >= MAX_NODES_LIMIT, 0)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Invalid destination node id %u (limit: %u)", dest_id,
+                   MAX_NODES_LIMIT);
+        return -EINVAL;
+    }
+    if (__builtin_expect(dest_id != conf_.current_node_id && node_id_to_idx_.find(dest_id) == node_id_to_idx_.end(),
+                         0)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: Unknown destination node %u", dest_id);
+        return UB_COMM_ERR_PEER_NODE_NOT_FOUND;
+    }
+    if (__builtin_expect(dest_id != conf_.current_node_id && !peer_alive_[dest_id].load(std::memory_order_acquire),
                          0)) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: destination consumer heartbeat timeout, node=%u", dest_id);
         return UB_COMM_ERR_PEER_NOT_READY;

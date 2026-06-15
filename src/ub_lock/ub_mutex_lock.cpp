@@ -365,6 +365,10 @@ static inline void mutex_backoff_sleep(uint32_t attempt)
 
 static inline ub_lock_result_t mutex_send_with_retry(const message_t *msg, uint32_t max_attempts)
 {
+    if (g_transport == nullptr) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Send failed: g_transport is nullptr");
+        return UB_LOCK_ERROR;
+    }
     for (uint32_t i = 0; i < max_attempts; ++i) {
         int ret = g_transport->send(msg);
         if (ret == UB_LOCK_SUCCESS) {

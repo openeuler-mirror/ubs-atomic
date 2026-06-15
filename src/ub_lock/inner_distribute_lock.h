@@ -37,6 +37,10 @@ struct local_msg_body_t {
 
 inline void clear_shared_owner_bitmap(ub_rw_lock_t *lock, uint8_t process_id)
 {
+    if (process_id >= 32) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "clear_shared_owner_bitmap failed: process_id %u exceeds max 31", process_id);
+        return;
+    }
     uint32_t mask = ~(1u << process_id);
     lock->shared_owner_bitmap.fetch_and(mask, std::memory_order_acq_rel);
 }

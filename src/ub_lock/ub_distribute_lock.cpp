@@ -1,4 +1,4 @@
-﻿/*
+/*
 * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 */
 
@@ -232,6 +232,10 @@ void log_timeout_null_lock(const TimeoutLogContext &ctx)
 
 void log_timeout_without_local(const TimeoutLogContext &ctx, const TimeoutGlobalLogInfo &global_info)
 {
+    if (ctx.location == nullptr) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "log_timeout_without_local: ctx.location is nullptr");
+        return;
+    }
     ATOMIC_LOG(LOG_LEVEL_ERROR,
                "UB lock timeout: wait=%s request=%s node=%u tid=%d lock=%p blocker=%s global[x=%s sx=%s "
                "reserve=%s waiters=%u] local=null",
@@ -613,6 +617,10 @@ void DistributedLock::cleanup_and_unlock_local(LocalLock *local_lock, int32_t ti
 
 inline void set_shared_owner_bitmap(ub_rw_lock_t *lock, uint8_t process_id)
 {
+    if (process_id >= 32) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "set_shared_owner_bitmap failed: process_id %u exceeds max 31", process_id);
+        return;
+    }
     uint32_t mask = (1u << process_id);
     lock->shared_owner_bitmap.fetch_or(mask, std::memory_order_release);
 }

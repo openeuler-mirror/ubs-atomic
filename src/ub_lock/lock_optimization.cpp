@@ -561,6 +561,11 @@ bool LocalLock::try_inc_global_ref()
 
     int32_t ref = global_read_ref_count_.load(std::memory_order_acquire);
     while (ref > 0) {
+        // 检查引用计数是否即将溢出
+        if (ref >= INT32_MAX) {
+            return false;
+        }
+        // 再次确认 state 仍是 HELD
         if (global_state_.load(std::memory_order_acquire) != LocalLock::GLOBAL_HELD) {
             return false;
         }
