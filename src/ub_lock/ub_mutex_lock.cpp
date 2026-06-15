@@ -395,7 +395,7 @@ static inline bool wait_mutex_ready(ub_mutex_lock_t *lock)
 
 static message_t *create_mutex_message(const ub_location_t &waiter_location, uint8_t src_node_id)
 {
-    message_t *msg = new message_t();
+    MessagePtr msg(new message_t());
     uint32_t body_len = sizeof(local_msg_body_t);
     msg->body = new char[body_len];
 
@@ -407,7 +407,7 @@ static message_t *create_mutex_message(const ub_location_t &waiter_location, uin
     msg->header.src_node_id = src_node_id;
     msg->header.msg_type = 0xFF;
     msg->header.priority = 0;
-    return msg;
+    return msg.release();
 }
 } // namespace
 
