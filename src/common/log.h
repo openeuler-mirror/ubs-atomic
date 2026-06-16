@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <iostream>
@@ -99,15 +100,19 @@ inline std::string GetCurrentTime()
     localtime_r(&t, &local_tm); // Linux/macOS线程安全；Windows替换为localtime_s
 
     // 5. 拼接纳秒级时间字符串（缓冲区扩容到40字节，纳秒占9位）
-    char time_buf[40];
-    snprintf(time_buf, sizeof(time_buf), "%04d-%02d-%02d %02d:%02d:%02d.%09d",
-             local_tm.tm_year + 1900,              // 年（tm_year是从1900开始的偏移）
-             local_tm.tm_mon + 1,                  // 月（tm_mon从0开始）
-             local_tm.tm_mday,                     // 日
-             local_tm.tm_hour,                     // 时
-             local_tm.tm_min,                      // 分
-             local_tm.tm_sec,                      // 秒
-             static_cast<int>(ns_remain.count())); // 纳秒（9位）
+    char time_buf[40]{};
+    int ret = std::snprintf(time_buf, sizeof(time_buf), "%04d-%02d-%02d %02d:%02d:%02d.%09d",
+                            local_tm.tm_year + 1900,              // 年（tm_year是从1900开始的偏移）
+                            local_tm.tm_mon + 1,                  // 月（tm_mon从0开始）
+                            local_tm.tm_mday,                     // 日
+                            local_tm.tm_hour,                     // 时
+                            local_tm.tm_min,                      // 分
+                            local_tm.tm_sec,                      // 秒
+                            static_cast<int>(ns_remain.count())); // 纳秒（9位）
+    if (ret < 0) {
+        return "0000-00-00 00:00:00.000000000";
+    }
+    time_buf[sizeof(time_buf) - 1] = '\0';
     return time_buf;
 }
 

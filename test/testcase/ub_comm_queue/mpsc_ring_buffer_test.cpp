@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -365,11 +366,11 @@ TEST(MPSCRingBufferTest, HalfWriteRecoveryDoesNotSkipWhenReservedSlotBecomesRead
     EXPECT_EQ(std::memcmp(out.data() + sizeof(message_header_t), body, sizeof(body)), 0);
 }
 
-TEST(MPSCRingBufferTest, InvalidCapacityAborts)
+TEST(MPSCRingBufferTest, InvalidCapacityThrows)
 {
     auto mem = AllocRingMemory(3, 128);
     ASSERT_NE(mem, nullptr);
-    EXPECT_DEATH({ ConstructRing(mem.get(), 3, 128); }, ".*");
+    EXPECT_THROW({ ConstructRing(mem.get(), 3, 128); }, std::invalid_argument);
 }
 
 } // namespace ut

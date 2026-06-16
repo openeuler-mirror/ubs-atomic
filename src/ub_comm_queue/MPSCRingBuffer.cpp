@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <stdexcept>
 
 #define MSG_HEADER_LEN sizeof(message_header_t)
 
@@ -103,7 +104,7 @@ MPSCRingBuffer::MPSCRingBuffer(uint8_t *buffer_start, uint32_t capacity, uint32_
 {
     if (capacity == 0 || (capacity & (capacity - 1)) != 0) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid ring buffer capacity,  must be a power of 2");
-        abort();
+        throw std::invalid_argument("ring buffer capacity must be a nonzero power of 2");
     }
     index_mask_ = entry_num_ - 1;
     // 计算 Entry 的步长 (Stride)
@@ -162,8 +163,11 @@ void MPSCRingBuffer::record_depth(uint64_t used)
 {
     uint64_t old = max_depth_.load(std::memory_order_relaxed);
     // Monotonic best-effort peak tracking: losing this race only means another producer recorded a newer value.
-    while (used > old &&
-           !max_depth_.compare_exchange_weak(old, used, std::memory_order_relaxed, std::memory_order_relaxed)) {}
+    while (used > old) {
+        if (max_depth_.compare_exchange_weak(old, used, std::memory_order_relaxed, std::memory_order_relaxed)) {
+            break;
+        }
+    }
 }
 
 void MPSCRingBuffer::record_full_fail()
@@ -554,10 +558,7 @@ int MPSCRingBuffer::enqueue_remote(MPSCRingBuffer *remote_this, const void *hdr,
         std::memcpy(entry->data, hdr, MSG_HEADER_LEN);
     }
 
-    // 6. [Fence] 保证数据先于 Flag
-    // arm_light_fence();
-
-    // 7. [Commit] 提交
+    // 6. [Commit] 提交
     entry->ready_seq.store(curr_tail + 1, std::memory_order_release);
 
     return remote_this->flow_result_after_enqueue_cached(curr_tail + 1, shadow_head, cached_threshold,

@@ -1035,8 +1035,8 @@ int UBShmTransport::send(const message_t *msg)
     } else {
         // [Remote Send] 走缓存逻辑
         std::shared_lock<std::shared_mutex> lock(cache_mutex_);
-        // TODO: ring_caches_ 这里仍然直接使用逻辑 node_id 作为数组下标。
-        // 稀疏 node_id 场景下存在设计风险，当前先保留原逻辑，仅用注释提示。
+        // ring_caches_ currently uses the logical node_id as the array index.
+        // Sparse node_id support requires a broader cache layout change.
         auto &cache = ring_caches_[dest_id][prio];
 
         // 1. 检查缓存是否就绪
@@ -1354,8 +1354,8 @@ int UBShmTransport::try_populate_cache(uint32_t node_id, uint32_t prio)
         return -EINVAL;
     }
 
-    // TODO: ring_caches_ 这里仍然直接使用逻辑 node_id 作为数组下标。
-    // 如果后面修这个问题，需要连同 send/remove_node_cache 一起改，避免索引体系混用。
+    // ring_caches_ currently uses the logical node_id as the array index.
+    // Sparse node_id support must keep send/remove_node_cache indexing consistent.
     auto &cache = ring_caches_[node_id][prio];
 
     // 1. 利用现有的 get_remote_ring 逻辑去读公告牌
