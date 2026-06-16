@@ -22,6 +22,8 @@ public:
     {
         delete lock_;
         delete shm_;
+        lock_ = nullptr;
+        shm_ = nullptr;
     }
 
 protected:

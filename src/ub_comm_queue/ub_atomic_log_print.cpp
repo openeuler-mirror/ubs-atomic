@@ -64,6 +64,7 @@ void log_print(int level, const char *file, const char *func, uint32_t line, con
         va_end(args);
         return;
     }
+    formatted_message[sizeof(formatted_message) - 1] = '\0';
 
     va_end(args);
 
