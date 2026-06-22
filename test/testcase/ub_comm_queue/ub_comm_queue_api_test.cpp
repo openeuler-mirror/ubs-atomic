@@ -471,5 +471,27 @@ TEST(UbCommQueueApiTest, LogRegistrationFormattingAndFiltering)
     EXPECT_EQ(log_no_print(LOG_LEVEL_INFO, "file.cpp", "func", 10, "noop"), 0);
 }
 
+// L167-L174: ub_atomic_register_log_func and ub_atomic_set_log_level are thin wrappers.
+TEST(UbCommQueueApiTest, AtomicLogHelpersAreAliases)
+{
+    register_print_func(CaptureLogger);
+    ub_atomic_register_log_func(nullptr); // resets to log_no_print
+    EXPECT_EQ(ub_atomic_set_log_level(LOG_LEVEL_DEBUG), 0);
+    EXPECT_EQ(ub_atomic_set_log_level(LOG_LEVEL_CRITICAL + 1), -1);
+    register_print_func(CaptureLogger); // restore for any later tests
+}
+
+// L67: deinit when the transport was registered as the lock transport resets g_transport.
+TEST(UbCommQueueApiTest, DeinitLockTransportClearsGlobal)
+{
+    g_transport = nullptr;
+    ApiEnv env(0);
+    ub_shm_comm_t handle = nullptr;
+    ASSERT_EQ(ub_comm_queue_init(&handle, env.InitArea(), env.RingMap(), env.Conf()), UB_COMM_OK);
+    EXPECT_NE(g_transport, nullptr);
+    EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
+    EXPECT_EQ(g_transport, nullptr);
+}
+
 } // namespace ut
 } // namespace ub_comm_queue
