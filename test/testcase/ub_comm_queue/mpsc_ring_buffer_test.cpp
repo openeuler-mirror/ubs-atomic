@@ -437,18 +437,18 @@ TEST(MPSCRingBufferTest, EnqueueRemoteRejectsNullArgsAndOversized)
     std::atomic<uint64_t> cachedThresholdVersion{0};
     message_header_t hdr = MakeHeader(1);
 
-    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(nullptr, &hdr, nullptr, 0, ring->get_entry_num() - 1,
-                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
-                                             cachedThreshold, cachedThresholdVersion),
-              -EINVAL);
-    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, nullptr, nullptr, 0, ring->get_entry_num() - 1,
-                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
-                                             cachedThreshold, cachedThresholdVersion),
-              -EINVAL);
-    EXPECT_EQ(MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 1, ring->get_entry_num() - 1,
-                                             ring->get_entry_stride(), ring->get_max_msg_size(), shadowHead,
-                                             cachedThreshold, cachedThresholdVersion),
-              -EINVAL);
+    EXPECT_EQ(
+        MPSCRingBuffer::enqueue_remote(nullptr, &hdr, nullptr, 0, ring->get_entry_num() - 1, ring->get_entry_stride(),
+                                       ring->get_max_msg_size(), shadowHead, cachedThreshold, cachedThresholdVersion),
+        -EINVAL);
+    EXPECT_EQ(
+        MPSCRingBuffer::enqueue_remote(ring, nullptr, nullptr, 0, ring->get_entry_num() - 1, ring->get_entry_stride(),
+                                       ring->get_max_msg_size(), shadowHead, cachedThreshold, cachedThresholdVersion),
+        -EINVAL);
+    EXPECT_EQ(
+        MPSCRingBuffer::enqueue_remote(ring, &hdr, nullptr, 1, ring->get_entry_num() - 1, ring->get_entry_stride(),
+                                       ring->get_max_msg_size(), shadowHead, cachedThreshold, cachedThresholdVersion),
+        -EINVAL);
 
     // total_len (header + body) > max_size.
     char body[256] = {};

@@ -1,10 +1,10 @@
 /*
 * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 */
+#include "ub_atomic_log_print.h"
 #include <atomic>
 #include <cstring>
 #include "gtest/gtest.h"
-#include "ub_atomic_log_print.h"
 
 namespace ub_comm_queue {
 namespace ut {

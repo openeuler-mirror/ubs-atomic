@@ -203,7 +203,8 @@ bool WaitUntil(std::chrono::milliseconds timeout, const std::function<bool()> &p
 
 uint64_t TestSteadyUs()
 {
-    struct timespec ts{};
+    struct timespec ts {
+    };
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
@@ -400,7 +401,6 @@ TEST(UbCommQueueApiTest, UBCQ_IF_RCV_EER_002_SetHeartbeatConfigWithoutQuery)
 
     EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
 }
-
 
 TEST(UbCommQueueApiTest, HeartbeatMonitorUsesPeerDeclaredIntervalBeforeTimingOut)
 {
