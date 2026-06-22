@@ -55,14 +55,6 @@ TEST_F(AtomicLogPrintTest, RegisterPrintFuncWithNullFallsBackToNoPrint)
     EXPECT_EQ(g_log_capture_count.load(std::memory_order_acquire), 0u);
 }
 
-// L14: register_print_func with valid func stores it.
-// TEST_F(AtomicLogPrintTest, RegisterPrintFuncWithValidFuncStoresIt)
-// {
-//     register_print_func(CaptureLog);
-//     log_print(LOG_LEVEL_INFO, "file.cpp", "func", 101, "with valid func");
-//     EXPECT_GE(g_log_capture_count.load(std::memory_order_acquire), 1u);
-// }
-
 // L28: get_log_level_threshold returns previously-stored threshold.
 TEST_F(AtomicLogPrintTest, GetLogLevelThresholdRoundTrip)
 {
