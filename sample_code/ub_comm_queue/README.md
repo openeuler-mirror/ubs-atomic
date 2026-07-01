@@ -64,11 +64,11 @@ make -j
 ```bash
 cd /path/to/ubs-atomic/sample_code/ub_comm_queue
 
-g++ -std=c++17 -O2 \
+g++ -g -O3 -fno-omit-frame-pointer \
     -o pingpong pingpong.cpp \
-    -I./ -L./ -lubs-atomic -lubsm_sdk -lpthread \
+    -l./ -L./ -lubs-atomic -lubsm_sdk -lpthread \
     -l/usr/local/ubs_mem/include/ -L/usr/local/ubs_mem/lib \
-    -Wl.-rpath,'/usr/local/ubs_mem/lib' -Wl,-rpath,'$ORIGIN'
+    -Wl,-rpath,'/usr/local/ubs_mem/lib' -Wl,-rpath,'$ORIGIN'
 ```
 
 > 请根据实际安装路径替换上述 `-I` 和 `-L` 参数。
@@ -104,7 +104,7 @@ Required:
   --role A|B         运行角色 (A=ping发送端, B=pong接收端)
 
 Common options:
-  --cpu-id <N>       绑定 CPU ID (A 默认 4, B 默认 200)
+  --cpu-id <N>       绑定 CPU ID (默认 4)
   --msg-size <bytes> 消息总长度含消息头 (支持: 64, 4096, 8192，默认 64)
   -0 <shm_name>      Node 0 共享内存名 (默认 shm_node0_export)
   -1 <shm_name>      Node 1 共享内存名 (默认 shm_node1_export)
@@ -176,5 +176,5 @@ avg_b_process(ns)=180.50
 
 1. **启动顺序**：先启动 B，再启动 A。A 启动后会等待 3 秒等待 B 就绪。
 2. **消息大小**：仅支持 64、4096、8192 三种，需大于等于 `HEADER_SIZE(16B) + PingPongMsg(48B) = 64B`。
-3. **CPU 绑定**：B 默认绑定 CPU 200（适用于大核机器），可通过 `--cpu-id` 调整。
+3. **CPU 绑定**：可通过 `--cpu-id` 调整。
 4. **跨节点部署**：两个节点必须能访问同名共享内存区域。
