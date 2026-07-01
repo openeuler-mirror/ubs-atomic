@@ -230,11 +230,12 @@ int main()
 
 ### 2. 分布式读写锁
 
-适用于跨节点读写互斥。锁对象本身必须放在一块所有参与节点都能映射到的共享内存中，并至少预留 `UB_RW_LOCK_SIZE` 字节。详细步骤可参考[sample_code](sample_code/ub_lock/README.md)。
+适用于跨节点读写互斥。锁对象本身必须放在一块所有参与节点都能映射到的共享内存中，并至少预留 `UB_RW_LOCK_SIZE` 字节。分布式读写锁的跨节点唤醒、延迟释放通知依赖 `ub_dist_comm_queue`，因此调用方必须先初始化通信队列，再创建和使用锁。详细步骤可参考[sample_code](sample_code/ub_lock/README.md)。
 
 ```cpp
 #include <array>
 #include <cstddef>
+#include "ub_dist_comm_queue.h"
 #include "ub_dist_lock.h"
 
 alignas(64) std::array<std::byte, UB_RW_LOCK_SIZE> lock_mem{};
@@ -246,6 +247,17 @@ int main()
     ub_lock_config_t config{.lease_time = 60000, .heartbeat_timeout = 500};
     ub_lock_policy_t policy{.timeout_ts = 1000, .allow_delay_release = false, .recursive = false};
 
+    // 前置条件：所有参与节点必须先完成通信队列初始化，并保持 handle 存活。
+    // init_region、ring_map、comm_conf 需要由调用方按集群节点和共享内存布局提前构造。
+    ub_shm_comm_t comm_handle = nullptr;
+    ub_shm_area_t init_region{};
+    ub_ring_region_map_t ring_map{};
+    ub_comm_conf_t comm_conf{};
+    comm_conf.current_node_id = self.node_id;
+    if (ub_comm_queue_init(&comm_handle, &init_region, &ring_map, &comm_conf) != 0) {
+        return 1;
+    }
+
     ub_rw_lock_create(lock, &config, &self);
 
     if (ub_rw_lock_x_lock(lock, &policy, &self) == UB_LOCK_SUCCESS) {
@@ -254,6 +266,7 @@ int main()
     }
 
     ub_rw_lock_free(lock, &self);
+    ub_comm_queue_deinit(&comm_handle);
     return 0;
 }
 ```
@@ -374,7 +387,8 @@ int main()
 - `recursive=true` 只适用于同一线程重复持锁场景。
 #### 参数约束与实现限制
 - `location.node_id`、`process_id` 有效范围是 [0,16)。
-- 锁会借助通信队列完成跨节点唤醒和释放通知，因此锁的生命周期一定要在通信队列实例生命周期内。
+- 锁会借助通信队列完成跨节点唤醒和释放通知；每个参与节点都必须先完成 `ub_comm_queue_init`，再调用 `ub_rw_lock_create`，并保证锁的生命周期处在通信队列实例生命周期内。
+- 通信队列的 `init_region`、节点 Ring 映射、`current_node_id`/`max_nodes` 等配置必须跨节点一致；若队列未初始化或节点间映射不一致，跨节点等待者可能无法收到唤醒/释放消息，表现为加锁超时或失败。
 - `ub_rw_lock_recover`接口内部无法判断传入的进程是否异常
 - 进程故障发送后，集群服务能获取故障进程ID，集群服务从正常进程中选出一个来调用分布式锁提供`ub_rw_lock_recover`的接口进行故障恢复，恢复流程完成后，集群服务才可重启故障进程。
 
