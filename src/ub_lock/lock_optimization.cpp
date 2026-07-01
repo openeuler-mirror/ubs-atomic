@@ -561,6 +561,11 @@ bool LocalLock::try_inc_global_ref()
 
     int32_t ref = global_read_ref_count_.load(std::memory_order_acquire);
     while (ref > 0) {
+        // 检查引用计数是否即将溢出
+        if (ref >= INT32_MAX) {
+            return false;
+        }
+        // 再次确认 state 仍是 HELD
         if (global_state_.load(std::memory_order_acquire) != LocalLock::GLOBAL_HELD) {
             return false;
         }
@@ -574,6 +579,10 @@ bool LocalLock::try_inc_global_ref()
 
 ub_lock_result_t DistributedLock::delay_unlock(ub_lock_mode_t mode, uint8_t node_id)
 {
+    if (node_id >= UB_MAX_NODES) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid delay_unlock node_id %u >= UB_MAX_NODES", node_id);
+        return UB_LOCK_ERROR;
+    }
     rw_lock_shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
     const ub_location_t location = {.tid = 0, .node_id = node_id}; // node_id才是关键
     switch (mode) {
@@ -665,11 +674,21 @@ ub_lock_result_t DistributedLock::delay_release_ub_lock(ub_lock_mode_t mode, Loc
     if (owner.node_id == location.node_id) {
         return UB_LOCK_SUCCESS;
     }
+    if (owner.node_id >= UB_MAX_NODES) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid reserve owner node_id %u >= UB_MAX_NODES", owner.node_id);
+        rw_lock_shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
+        return UB_LOCK_ERROR;
+    }
 
     ub_rw_lock_t *remote_lock = reinterpret_cast<ub_rw_lock_t *>(rw_lock_shm_->node_registry[owner.node_id]);
 
     if (remote_lock == nullptr) {
         return UB_LOCK_SUCCESS; // 走全局锁路径
+    }
+    if ((reinterpret_cast<uintptr_t>(remote_lock) % UB_CACHELINE_SIZE) != 0u) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid node_registry lock pointer %p for node %u", remote_lock, owner.node_id);
+        rw_lock_shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
+        return UB_LOCK_ERROR;
     }
 
     local_msg_body_t body{};
