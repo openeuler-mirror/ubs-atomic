@@ -208,7 +208,9 @@ int my_stdout_logger(int level, const char *file, const char *func, uint32_t lin
     char *time_str = ctime(&now);
     time_str[strlen(time_str) - 1] = '\0';
 
-    fprintf(stdout, "[%s] [%s:%u] [%s] %s\n", time_str, file, line, level_str, message);
+    if (fprintf(stdout, "[%s] [%s:%u] [%s] %s\n", time_str, file, line, level_str, message) < 0) {
+        clearerr(stdout);
+    }
 
     return 0;
 }
@@ -271,6 +273,9 @@ static ub_location_t make_location(uint8_t node_id)
 template <typename T>
 constexpr T align_up(T value, std::size_t alignment)
 {
+    if (alignment == 0) {
+        return value;
+    }
     return (value + alignment - 1) / alignment * alignment;
 }
 
@@ -313,7 +318,9 @@ int map_ub_shm(const char *shm_name, void *&addr)
         fprintf(stderr, "Failed to map shared memory! ret=%d\n", ret);
         return -1;
     }
-    fprintf(stdout, "addr: %p\n", addr);
+    if (fprintf(stdout, "addr: %p\n", addr) < 0) {
+        clearerr(stdout);
+    }
 
     return 0;
 }
@@ -1004,7 +1011,7 @@ int main(int argc, char *argv[])
               << "  q / quit\n";
 
     std::string line;
-    while (true) {
+    while (std::cin.good()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         std::cout << "ub_lock_cli> ";
         if (!std::getline(std::cin, line))
