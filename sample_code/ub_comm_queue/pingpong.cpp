@@ -368,7 +368,7 @@ static void print_help(const char* prog) {
     printf("  --role A|B         运行角色 (A=ping发送端, B=pong接收端)\n");
     printf("\n");
     printf("Common options:\n");
-    printf("  --cpu-id <N>       绑定 CPU ID (A 默认 4, B 默认 200)\n");
+    printf("  --cpu-id <N>       绑定 CPU ID (A 默认 4, B 默认 4)\n");
     printf("  --msg-size <bytes> 消息总长度含消息头 (支持: 64, 4096, 8192，默认 64)\n");
     printf("  -0 <shm_name>      Node 0 共享内存名 (默认 shm_node0_export)\n");
     printf("  -1 <shm_name>      Node 1 共享内存名 (默认 shm_node1_export)\n");
@@ -457,7 +457,7 @@ int main(int argc, char* argv[]) {
 
     // 根据角色设置默认 cpu_id
     if (g_cpu_id < 0) {
-        g_cpu_id = (g_role == ROLE_A) ? 4 : 200;
+        g_cpu_id = 4;
     }
 
     // B 角色特殊参数：-n 含义不同（期望接收数），默认 0 表示永远运行
