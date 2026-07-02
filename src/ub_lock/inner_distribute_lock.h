@@ -37,6 +37,10 @@ struct local_msg_body_t {
 
 inline void clear_shared_owner_bitmap(ub_rw_lock_t *lock, uint8_t process_id)
 {
+    if (process_id >= 32) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "clear_shared_owner_bitmap failed: process_id %u exceeds max 31", process_id);
+        return;
+    }
     uint32_t mask = ~(1u << process_id);
     lock->shared_owner_bitmap.fetch_and(mask, std::memory_order_acq_rel);
 }
@@ -78,7 +82,7 @@ private:
     void clean_timeout_waiter(uint32_t ticket); // 清理等待队列中已经超时的 waiter
     void clean_outqueue_waiter(uint32_t ticket);
     void recover_shared_lock(uint32_t process_id);
-    void cleanup_and_unlock_local(LocalLock *local_lock);
+    void cleanup_and_unlock_local(LocalLock *local_lock, int32_t tid);
     bool peek_head_waiting_mode_clean(ub_lock_mode_t &mode_out);
 
     // 消息管理
@@ -97,6 +101,8 @@ private:
     void dump_timeout_holder_info(const ub_location_t &location, ub_lock_mode_t request_mode, LocalLock *local_lock,
                                   const char *reason);
     bool wait_follower_s(const ub_location_t &location, LocalLock *local_lock, const steady_time_point &deadline);
+    ub_lock_result_t wait_or_claim_global_s(const ub_location_t &location, LocalLock *local_lock,
+                                            const steady_time_point &deadline, bool &became_leader);
     ub_lock_result_t spin_wait_s_loop(const ub_location_t &location, LocalLock *local_lock,
                                       const steady_time_point &deadline);
     ub_lock_result_t spin_wait_x_loop(const ub_location_t &location, LocalLock *local_lock,

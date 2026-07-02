@@ -39,6 +39,8 @@ public:
         }
         delete lock_;
         delete shm_;
+        lock_ = nullptr;
+        shm_ = nullptr;
         delete g_transport;
         g_transport = nullptr;
         GlobalMockObject::verify();
@@ -63,7 +65,10 @@ TEST_F(MessageManageTest, CreateMassageTest)
     ub_location_t loc{1, 2};
     local_msg_body_t body = {.tid = 1, .addr = nullptr, .type = UB_RELEASE, .mode = UB_LOCK_SX};
     message_t *msg = lock_->create_message(loc, 1, body);
+    ASSERT_NE(msg, nullptr);
     EXPECT_EQ(msg->header.src_node_id, 1);
+    delete[] msg->body;
+    delete msg;
 }
 
 TEST_F(MessageManageTest, NotifyWaitersTest)
@@ -114,6 +119,16 @@ TEST_F(MessageManageTest, MessageProcessReleaseWithNullLocalLock)
     delete[] msg.body;
 }
 
+TEST_F(MessageManageTest, MessageProcessRejectsShortBody)
+{
+    char short_body[sizeof(local_msg_body_t) - 1] = {};
+    message_t msg{};
+    msg.header.body_length = sizeof(short_body);
+    msg.body = short_body;
+
+    message_process_thread_func(&msg, nullptr);
+}
+
 TEST_F(MessageManageTest, MessageProcessReleaseWithNullUbLock)
 {
     auto *local_lock = new LocalLock(nullptr);
@@ -161,7 +176,7 @@ TEST_F(MessageManageTest, MessageProcessReleaseWhenRemoteReleaseInProgress)
 TEST_F(MessageManageTest, MessageProcessReleaseWhenLocalLockHeld)
 {
     auto *local_lock = new LocalLock(shm_);
-    local_lock->lock_word.v.store(X_LOCK_DECR - 1, std::memory_order_release);
+    local_lock->lock_word.store(1, std::memory_order_release);
 
     local_msg_body_t body{};
     body.addr = local_lock;
@@ -236,6 +251,7 @@ TEST_F(MessageManageTest, MessageProcessThreadTest)
     ub_location_t loc{1, 2};
     local_msg_body_t body = {.tid = 1, .addr = nullptr, .type = UB_GRANT, .mode = UB_LOCK_SX};
     message_t *msg = lock_->create_message(loc, 1, body);
+    ASSERT_NE(msg, nullptr);
 
     message_process_thread_func(nullptr, nullptr);
     message_process_thread_func(msg, nullptr);
@@ -244,12 +260,14 @@ TEST_F(MessageManageTest, MessageProcessThreadTest)
 
     body.type = UB_RELEASE;
     msg = lock_->create_message(loc, 1, body);
+    ASSERT_NE(msg, nullptr);
     message_process_thread_func(msg, nullptr);
     delete[] msg->body;
     delete msg;
 
     body.type = UB_UNKNOWN;
     msg = lock_->create_message(loc, 1, body);
+    ASSERT_NE(msg, nullptr);
     message_process_thread_func(msg, nullptr);
     delete[] msg->body;
     delete msg;
@@ -261,6 +279,7 @@ TEST_F(MessageManageTest, MessageProcessGrantNotifiesCtx)
     local_wait_ctx_t ctx{};
     local_msg_body_t body = {.tid = 1, .addr = &ctx, .type = UB_GRANT, .mode = UB_LOCK_S};
     message_t *msg = lock_->create_message(loc, 1, body);
+    ASSERT_NE(msg, nullptr);
 
     message_process_thread_func(msg, nullptr);
     EXPECT_FALSE(ctx.notified);

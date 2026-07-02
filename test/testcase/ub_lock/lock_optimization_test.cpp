@@ -30,6 +30,12 @@ static void WaitForLocalWaiters(LocalLock *lock)
     }
 }
 
+static uint64_t LocalReaderStateForTid(int32_t tid, uint16_t count = 1)
+{
+    const uint32_t lane = local_lock_lane_for_tid(tid);
+    return static_cast<uint64_t>(count) << (lane * LOCAL_LOCK_READER_LANE_BITS);
+}
+
 class LocalLockTest : public ::testing::Test {
 public:
     void SetUp() override
@@ -41,7 +47,9 @@ public:
     void TearDown() override
     {
         delete lock_;
+        lock_ = nullptr;
         delete shm_;
+        shm_ = nullptr;
     }
 
 protected:
@@ -51,7 +59,8 @@ protected:
 
 TEST_F(LocalLockTest, InitResetsState)
 {
-    lock_->lock_word.v.store(123, std::memory_order_release);
+    constexpr uint64_t kTestLockWordValue = 123;
+    lock_->lock_word.store(kTestLockWordValue, std::memory_order_release);
     lock_->read_count.store(5, std::memory_order_release);
     lock_->waiting_count.store(7, std::memory_order_release);
     lock_->lock_x_owner.store(11, std::memory_order_release);
@@ -67,7 +76,7 @@ TEST_F(LocalLockTest, InitResetsState)
 
     lock_->init_();
 
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_DECR);
+    EXPECT_EQ(lock_->lock_word.load(), 0u);
     EXPECT_EQ(lock_->read_count.load(), 0u);
     EXPECT_EQ(lock_->waiting_count.load(), 0u);
     EXPECT_EQ(lock_->lock_x_owner.load(), 0);
@@ -138,9 +147,9 @@ TEST_F(LocalLockTest, PeekHeadWaitingModeCleanSkipsReleased)
 
 TEST_F(LocalLockTest, RemoteReleaseFlagAndHeldCheck)
 {
-    lock_->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_->lock_word.store(0, std::memory_order_release);
     EXPECT_FALSE(lock_->is_held());
-    lock_->lock_word.v.store(X_LOCK_DECR - 1, std::memory_order_release);
+    lock_->lock_word.store(1, std::memory_order_release);
     EXPECT_TRUE(lock_->is_held());
 
     EXPECT_TRUE(lock_->try_begin_remote_release());
@@ -155,7 +164,7 @@ TEST_F(LocalLockTest, LockXFastPathAndRecursiveBehavior)
     const int32_t tid = ub_get_tid_i32();
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(10);
 
-    lock_->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_->lock_word.store(0, std::memory_order_release);
     EXPECT_EQ(lock_->lock_x(false, tid, deadline), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->lock_x_owner.load(), static_cast<uint64_t>(tid));
     EXPECT_EQ(lock_->x_recursive_.load(), 1u);
@@ -171,11 +180,11 @@ TEST_F(LocalLockTest, LockSxFastPathAndRecursiveBehavior)
     const int32_t tid = ub_get_tid_i32();
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(10);
 
-    lock_->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_->lock_word.store(0, std::memory_order_release);
     EXPECT_EQ(lock_->lock_sx(false, tid, deadline), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->lock_sx_owner.load(), static_cast<uint64_t>(tid));
     EXPECT_EQ(lock_->sx_recursive_.load(), 1u);
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_HALF_DECR);
+    EXPECT_EQ(lock_->lock_word.load(), LOCAL_LOCK_SX_FLAG);
 
     EXPECT_EQ(lock_->lock_sx(true, tid, deadline), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->sx_recursive_.load(), 2u);
@@ -189,15 +198,15 @@ TEST_F(LocalLockTest, UnlockXReleasesOrKeepsOnRecursive)
 
     lock_->lock_x_owner.store(tid, std::memory_order_release);
     lock_->x_recursive_.store(2u, std::memory_order_release);
-    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->lock_word.store(LOCAL_LOCK_X_STATE, std::memory_order_release);
     EXPECT_EQ(lock_->unlock_x(true, tid), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->x_recursive_.load(), 1u);
-    EXPECT_EQ(lock_->lock_word.v.load(), 0);
+    EXPECT_EQ(lock_->lock_word.load(), LOCAL_LOCK_X_STATE);
 
     lock_->x_recursive_.store(1u, std::memory_order_release);
     EXPECT_EQ(lock_->unlock_x(true, tid), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->x_recursive_.load(), 0u);
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_DECR);
+    EXPECT_EQ(lock_->lock_word.load(), 0u);
     EXPECT_EQ(lock_->lock_x_owner.load(), 0u);
 }
 
@@ -207,35 +216,39 @@ TEST_F(LocalLockTest, UnlockSxReleasesOrKeepsOnRecursive)
 
     lock_->lock_sx_owner.store(tid, std::memory_order_release);
     lock_->sx_recursive_.store(2u, std::memory_order_release);
-    lock_->lock_word.v.store(X_LOCK_HALF_DECR, std::memory_order_release);
+    lock_->lock_word.store(LOCAL_LOCK_SX_FLAG, std::memory_order_release);
     EXPECT_EQ(lock_->unlock_sx(true, tid), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->sx_recursive_.load(), 1u);
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_HALF_DECR);
+    EXPECT_EQ(lock_->lock_word.load(), LOCAL_LOCK_SX_FLAG);
 
     lock_->sx_recursive_.store(1u, std::memory_order_release);
     EXPECT_EQ(lock_->unlock_sx(true, tid), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->sx_recursive_.load(), 0u);
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_DECR);
+    EXPECT_EQ(lock_->lock_word.load(), 0u);
     EXPECT_EQ(lock_->lock_sx_owner.load(), 0u);
 }
 
 TEST_F(LocalLockTest, LockSUnlockSUpdatesCounters)
 {
-    uint64_t tid = static_cast<uint64_t>(ub_get_tid_i32());
-    uint64_t tid2 = tid + 1;
+    int32_t tid = ub_get_tid_i32();
+    int32_t tid2 = tid + 1;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(10);
     EXPECT_EQ(lock_->lock_s(tid, deadline), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->read_count.load(), 1u);
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_DECR - 1);
+    EXPECT_EQ(local_lock_reader_count(lock_->lock_word.load()), 1u);
+    EXPECT_TRUE(lock_->is_held());
 
     EXPECT_EQ(lock_->lock_s(tid2, deadline), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->read_count.load(), 2u);
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_DECR - 2);
+    EXPECT_EQ(local_lock_reader_count(lock_->lock_word.load()), 2u);
+    EXPECT_TRUE(lock_->is_held());
 
-    EXPECT_EQ(lock_->unlock_s(), UB_LOCK_SUCCESS);
-    EXPECT_EQ(lock_->unlock_s(), UB_LOCK_SUCCESS);
+    EXPECT_EQ(lock_->unlock_s(tid), UB_LOCK_SUCCESS);
+    EXPECT_EQ(local_lock_reader_count(lock_->lock_word.load()), 1u);
+    EXPECT_EQ(lock_->unlock_s(tid2), UB_LOCK_SUCCESS);
     EXPECT_EQ(lock_->read_count.load(), 2u);
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_DECR);
+    EXPECT_EQ(local_lock_reader_count(lock_->lock_word.load()), 0u);
+    EXPECT_FALSE(lock_->is_held());
 }
 
 TEST_F(LocalLockTest, WakeAfterUnlockExclusiveHeadXNotifiesOne)
@@ -287,7 +300,7 @@ TEST_F(LocalLockTest, WakeAfterUnlockExclusiveHeadSxNotifiesSUntilStop)
 
 TEST_F(LocalLockTest, LockSSlowPathTimeoutEnqueuesAndCleans)
 {
-    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->lock_word.store(LOCAL_LOCK_X_STATE, std::memory_order_release);
     lock_->waiting_count.store(1, std::memory_order_release);
     auto deadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
 
@@ -298,7 +311,7 @@ TEST_F(LocalLockTest, LockSSlowPathTimeoutEnqueuesAndCleans)
 
 TEST_F(LocalLockTest, LockXSlowPathTimeoutEnqueuesAndCleans)
 {
-    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->lock_word.store(1, std::memory_order_release);
     lock_->waiting_count.store(1, std::memory_order_release);
     auto deadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
 
@@ -309,7 +322,7 @@ TEST_F(LocalLockTest, LockXSlowPathTimeoutEnqueuesAndCleans)
 
 TEST_F(LocalLockTest, LockSxSlowPathTimeoutEnqueuesAndCleans)
 {
-    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->lock_word.store(LOCAL_LOCK_X_STATE, std::memory_order_release);
     lock_->waiting_count.store(1, std::memory_order_release);
     auto deadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
 
@@ -320,7 +333,7 @@ TEST_F(LocalLockTest, LockSxSlowPathTimeoutEnqueuesAndCleans)
 
 TEST_F(LocalLockTest, LockSSlowPathWakesAndAcquires)
 {
-    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->lock_word.store(LOCAL_LOCK_X_STATE, std::memory_order_release);
     lock_->waiting_count.store(0, std::memory_order_release);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
 
@@ -328,17 +341,17 @@ TEST_F(LocalLockTest, LockSSlowPathWakesAndAcquires)
     std::thread t([&] { result = lock_->lock_s(1, deadline); });
 
     WaitForLocalWaiters(lock_);
-    lock_->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_->lock_word.store(0, std::memory_order_release);
     lock_->wake_after_unlock_exclusive();
 
     t.join();
     EXPECT_EQ(result, UB_LOCK_SUCCESS);
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_DECR - 1);
+    EXPECT_TRUE(lock_->is_held());
 }
 
 TEST_F(LocalLockTest, LockXSlowPathWakesAndAcquires)
 {
-    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->lock_word.store(LOCAL_LOCK_X_STATE, std::memory_order_release);
     lock_->waiting_count.store(0, std::memory_order_release);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
 
@@ -346,17 +359,17 @@ TEST_F(LocalLockTest, LockXSlowPathWakesAndAcquires)
     std::thread t([&] { result = lock_->lock_x(false, 1, deadline); });
 
     WaitForLocalWaiters(lock_);
-    lock_->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_->lock_word.store(0, std::memory_order_release);
     lock_->wake_after_unlock_exclusive();
 
     t.join();
     EXPECT_EQ(result, UB_LOCK_SUCCESS);
-    EXPECT_EQ(lock_->lock_word.v.load(), 0);
+    EXPECT_EQ(lock_->lock_word.load(), LOCAL_LOCK_X_STATE);
 }
 
 TEST_F(LocalLockTest, LockSxSlowPathWakesAndAcquires)
 {
-    lock_->lock_word.v.store(0, std::memory_order_release);
+    lock_->lock_word.store(LOCAL_LOCK_X_STATE, std::memory_order_release);
     lock_->waiting_count.store(0, std::memory_order_release);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
 
@@ -364,12 +377,12 @@ TEST_F(LocalLockTest, LockSxSlowPathWakesAndAcquires)
     std::thread t([&] { result = lock_->lock_sx(false, 1, deadline); });
 
     WaitForLocalWaiters(lock_);
-    lock_->lock_word.v.store(X_LOCK_DECR, std::memory_order_release);
+    lock_->lock_word.store(0, std::memory_order_release);
     lock_->wake_after_unlock_exclusive();
 
     t.join();
     EXPECT_EQ(result, UB_LOCK_SUCCESS);
-    EXPECT_EQ(lock_->lock_word.v.load(), X_LOCK_HALF_DECR);
+    EXPECT_EQ(lock_->lock_word.load(), LOCAL_LOCK_SX_FLAG);
 }
 
 class LocalOptimizationTest : public ::testing::Test {
@@ -391,7 +404,9 @@ public:
             }
         }
         delete lock_;
+        lock_ = nullptr;
         delete shm_;
+        shm_ = nullptr;
     }
 
 protected:
@@ -475,6 +490,13 @@ TEST_F(LocalOptimizationTest, DelayReleaseLocalLockHandlesReserveModes)
     ub_location_t loc{2, 0};
     auto local_lock_sp = std::make_shared<LocalLock>(shm_);
     register_local_lock(shm_, local_lock_sp);
+    struct LocalLockRegistryGuard {
+        ub_rw_lock_t *shm;
+        ~LocalLockRegistryGuard()
+        {
+            (void)unregister_local_lock(shm);
+        }
+    } registry_guard{shm_};
     auto *local_lock = local_lock_sp.get();
 
     local_lock->local_is_reserve_lock.store(UB_LOCK_S, std::memory_order_release);
@@ -485,7 +507,6 @@ TEST_F(LocalOptimizationTest, DelayReleaseLocalLockHandlesReserveModes)
     EXPECT_EQ(lock_->delay_release_local_lock(*local_lock, UB_LOCK_X, loc), UB_LOCK_SUCCESS);
     EXPECT_EQ(local_lock->local_is_reserve_lock.load(), UB_LOCK_I);
     EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR);
-    unregister_local_lock(shm_);
 }
 
 TEST_F(LocalOptimizationTest, DelayReleaseUbLockNoOwnerOrSlot)

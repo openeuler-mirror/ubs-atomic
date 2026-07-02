@@ -1,4 +1,4 @@
-﻿/*
+/*
 * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 */
 
@@ -57,7 +57,7 @@ struct TimeoutGlobalSnapshot {
 };
 
 struct TimeoutLocalSnapshot {
-    int32_t lock_word{0};
+    uint64_t lock_word{0};
     uint32_t read_count{0};
     uint32_t waiting_count{0};
     int32_t owner_x{0};
@@ -150,14 +150,17 @@ std::string format_local_blocker(ub_lock_mode_t request_mode, int32_t request_ti
         return "X(tid=" + std::to_string(snapshot.owner_x) + "," +
                (snapshot.owner_x == request_tid ? "self" : "other") + ")";
     }
+    if ((snapshot.lock_word & (LOCAL_LOCK_X_FLAG | LOCAL_LOCK_READER_SENTINEL_MASK)) != 0) {
+        return "X(tid=unknown)";
+    }
     if ((request_mode == UB_LOCK_X || request_mode == UB_LOCK_SX) && snapshot.owner_sx != 0) {
         return "SX(tid=" + std::to_string(snapshot.owner_sx) + "," +
                (snapshot.owner_sx == request_tid ? "self" : "other") + ")";
     }
-    if (request_mode == UB_LOCK_X && snapshot.read_count != 0u) {
-        return "S(read_count=" + std::to_string(snapshot.read_count) + ")";
+    if ((request_mode == UB_LOCK_X || request_mode == UB_LOCK_SX) && (snapshot.lock_word & LOCAL_LOCK_SX_FLAG) != 0) {
+        return "SX(tid=unknown)";
     }
-    if (request_mode == UB_LOCK_SX && snapshot.lock_word <= X_LOCK_HALF_DECR && snapshot.read_count != 0u) {
+    if (request_mode == UB_LOCK_X && snapshot.read_count != 0u) {
         return "S(read_count=" + std::to_string(snapshot.read_count) + ")";
     }
     if (snapshot.waiting_count != 0u) {
@@ -181,8 +184,8 @@ TimeoutGlobalSnapshot collect_global_timeout_snapshot(ub_rw_lock_t *lock)
 TimeoutLocalSnapshot collect_local_timeout_snapshot(LocalLock *local_lock)
 {
     TimeoutLocalSnapshot snapshot{};
-    snapshot.lock_word = local_lock->lock_word.v.load(std::memory_order_acquire);
-    snapshot.read_count = local_lock->read_count.load(std::memory_order_acquire);
+    snapshot.lock_word = local_lock->lock_word.load(std::memory_order_acquire);
+    snapshot.read_count = local_lock_reader_count(snapshot.lock_word);
     snapshot.waiting_count = local_lock->waiting_count.load(std::memory_order_acquire);
     snapshot.owner_x = local_lock->lock_x_owner.load(std::memory_order_acquire);
     snapshot.owner_sx = local_lock->lock_sx_owner.load(std::memory_order_acquire);
@@ -229,6 +232,10 @@ void log_timeout_null_lock(const TimeoutLogContext &ctx)
 
 void log_timeout_without_local(const TimeoutLogContext &ctx, const TimeoutGlobalLogInfo &global_info)
 {
+    if (ctx.location == nullptr) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "log_timeout_without_local: ctx.location is nullptr");
+        return;
+    }
     ATOMIC_LOG(LOG_LEVEL_ERROR,
                "UB lock timeout: wait=%s request=%s node=%u tid=%d lock=%p blocker=%s global[x=%s sx=%s "
                "reserve=%s waiters=%u] local=null",
@@ -243,13 +250,13 @@ void log_timeout_with_local(const TimeoutLogContext &ctx, const TimeoutGlobalLog
 {
     ATOMIC_LOG(LOG_LEVEL_ERROR,
                "UB lock timeout: wait=%s request=%s node=%u tid=%d lock=%p blocker=%s global[x=%s sx=%s reserve=%s "
-               "waiters=%u] local[x=%d sx=%d readers=%u waiters=%u reserve=%s]",
+               "waiters=%u] local[state=0x%llx x=%d sx=%d readers=%u waiters=%u reserve=%s]",
                ctx.wait_scope, lock_mode_name(ctx.request_mode), static_cast<unsigned>(ctx.location->node_id),
                ctx.location->tid, static_cast<void *>(ctx.lock), ctx.blocker.c_str(), global_info.owner_x_desc.c_str(),
                global_info.owner_sx_desc.c_str(), global_info.reserve_owner_desc.c_str(),
-               global_info.snapshot.waiting_count, local_info.snapshot.owner_x, local_info.snapshot.owner_sx,
-               local_info.snapshot.read_count, local_info.snapshot.waiting_count,
-               lock_mode_name(local_info.snapshot.reserve_mode));
+               global_info.snapshot.waiting_count, static_cast<unsigned long long>(local_info.snapshot.lock_word),
+               local_info.snapshot.owner_x, local_info.snapshot.owner_sx, local_info.snapshot.read_count,
+               local_info.snapshot.waiting_count, lock_mode_name(local_info.snapshot.reserve_mode));
 }
 
 bool is_valid_query_result_entry(const ub_lock_query_result_t &entry)
@@ -596,7 +603,7 @@ ub_lock_result_t DistributedLock::verify_param(const ub_location_t &location)
     return UB_LOCK_SUCCESS;
 }
 
-void DistributedLock::cleanup_and_unlock_local(LocalLock *local_lock)
+void DistributedLock::cleanup_and_unlock_local(LocalLock *local_lock, int32_t tid)
 {
     if (local_lock) {
         local_lock->global_state_.store(LocalLock::GLOBAL_IDLE, std::memory_order_release);
@@ -604,12 +611,16 @@ void DistributedLock::cleanup_and_unlock_local(LocalLock *local_lock)
         local_lock->hold_global.store(false, std::memory_order_release);
         // 唤醒 Follower 让它们重新去抢
         local_lock->global_pending_cv_.notify_all();
-        local_lock->unlock_s();
+        local_lock->unlock_s(tid);
     }
 }
 
 inline void set_shared_owner_bitmap(ub_rw_lock_t *lock, uint8_t process_id)
 {
+    if (process_id >= 32) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "set_shared_owner_bitmap failed: process_id %u exceeds max 31", process_id);
+        return;
+    }
     uint32_t mask = (1u << process_id);
     lock->shared_owner_bitmap.fetch_or(mask, std::memory_order_release);
 }
@@ -644,15 +655,49 @@ bool DistributedLock::wait_follower_s(const ub_location_t &location, LocalLock *
                                       const steady_time_point &deadline)
 {
     std::unique_lock<std::mutex> lk(local_lock->global_pending_mtx_);
-    if (local_lock->global_pending_cv_.wait_until(lk, deadline) == std::cv_status::timeout) {
-        if (std::chrono::steady_clock::now() >= deadline) {
-            dump_timeout_holder_info(location, UB_LOCK_S, local_lock, "follower_global_wait");
-            local_lock->unlock_s();
-            ATOMIC_LOG(LOG_LEVEL_ERROR, "The UB lock hold timeout");
-            return false;
-        }
+    if (!local_lock->global_pending_cv_.wait_until(lk, deadline, [&] {
+            return local_lock->global_state_.load(std::memory_order_acquire) != LocalLock::GLOBAL_PENDING;
+        })) {
+        dump_timeout_holder_info(location, UB_LOCK_S, local_lock, "follower_global_wait");
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "The UB lock hold timeout");
+        return false;
     }
     return true;
+}
+
+ub_lock_result_t DistributedLock::wait_or_claim_global_s(const ub_location_t &location, LocalLock *local_lock,
+                                                         const steady_time_point &deadline, bool &became_leader)
+{
+    became_leader = false;
+    while (true) {
+        if (local_lock->try_inc_global_ref()) {
+            return UB_LOCK_SUCCESS;
+        }
+        const int global_state = local_lock->global_state_.load(std::memory_order_acquire);
+        if (global_state == LocalLock::GLOBAL_IDLE) {
+            int expected = LocalLock::GLOBAL_IDLE;
+            if (local_lock->global_state_.compare_exchange_strong(
+                    expected, LocalLock::GLOBAL_PENDING, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                became_leader = true;
+                return UB_LOCK_SUCCESS;
+            }
+            continue;
+        }
+        if (global_state == LocalLock::GLOBAL_PENDING) {
+            if (!wait_follower_s(location, local_lock, deadline)) {
+                (void)local_lock->unlock_s(location.tid);
+                return UB_LOCK_TIMEOUT;
+            }
+            continue;
+        }
+        if (std::chrono::steady_clock::now() > deadline) {
+            dump_timeout_holder_info(location, UB_LOCK_S, local_lock, "local_global_state_wait");
+            (void)local_lock->unlock_s(location.tid);
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "The UB lock hold timeout");
+            return UB_LOCK_TIMEOUT;
+        }
+        cpu_relax();
+    }
 }
 
 ub_lock_result_t DistributedLock::spin_wait_s_loop(const ub_location_t &location, LocalLock *local_lock,
@@ -688,7 +733,7 @@ ub_lock_result_t DistributedLock::spin_wait_s_loop(const ub_location_t &location
                 if (std::chrono::steady_clock::now() > deadline) {
                     dump_timeout_holder_info(location, UB_LOCK_S, local_lock, "global_spin_wait");
                     clean_timeout_waiter(slot);
-                    cleanup_and_unlock_local(local_lock);
+                    cleanup_and_unlock_local(local_lock, location.tid);
                     ATOMIC_LOG(LOG_LEVEL_ERROR, "The UB lock hold timeout");
                     return UB_LOCK_TIMEOUT;
                 }
@@ -703,7 +748,7 @@ ub_lock_result_t DistributedLock::spin_wait_s_loop(const ub_location_t &location
         WaiterGuard guard(location.tid, &ctx);
         ub_lock_result_t ret = enqueue_waiter(UB_LOCK_S, location, slot);
         if (ret != UB_LOCK_SUCCESS) {
-            cleanup_and_unlock_local(local_lock);
+            cleanup_and_unlock_local(local_lock, location.tid);
             ATOMIC_LOG(LOG_LEVEL_ERROR, "The UB lock waiting queue is full");
             return ret;
         }
@@ -720,7 +765,7 @@ ub_lock_result_t DistributedLock::spin_wait_s_loop(const ub_location_t &location
             if (!ctx.wait(deadline)) {
                 dump_timeout_holder_info(location, UB_LOCK_S, local_lock, "global_queue_wait");
                 clean_timeout_waiter(slot);
-                cleanup_and_unlock_local(local_lock);
+                cleanup_and_unlock_local(local_lock, location.tid);
                 ATOMIC_LOG(LOG_LEVEL_ERROR, "The UB lock hold timeout");
                 return UB_LOCK_TIMEOUT;
             }
@@ -752,19 +797,11 @@ ub_lock_result_t DistributedLock::lock_s(const ub_lock_policy_t &policy, const u
         }
         return ret;
     }
-    while (true) {
-        if (local_lock->try_inc_global_ref()) {
-            return UB_LOCK_SUCCESS;
-        }
-        if (local_lock->global_state_.load(std::memory_order_relaxed) == LocalLock::GLOBAL_IDLE) {
-            int expected = LocalLock::GLOBAL_IDLE;
-            if (local_lock->global_state_.compare_exchange_strong(
-                    expected, LocalLock::GLOBAL_PENDING, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                break;
-            }
-        }
-        if (!wait_follower_s(location, local_lock, deadline))
-            return UB_LOCK_TIMEOUT;
+
+    bool became_leader = false;
+    ret = wait_or_claim_global_s(location, local_lock, deadline, became_leader);
+    if (ret != UB_LOCK_SUCCESS || !became_leader) {
+        return ret;
     }
 
     ret = delay_release_local_lock(*local_lock, UB_LOCK_S, location);
@@ -794,8 +831,13 @@ ub_lock_result_t DistributedLock::unlock_s(const ub_lock_policy_t &policy, const
     ub_lock_result_t ret;
     int32_t old_ref = local_lock->global_read_ref_count_.fetch_sub(1, std::memory_order_acq_rel);
     if (old_ref > 1) {
-        ret = local_lock->unlock_s();
+        ret = local_lock->unlock_s(location.tid);
         return ret;
+    }
+    if (old_ref <= 0) {
+        local_lock->global_read_ref_count_.fetch_add(1, std::memory_order_acq_rel);
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Hold the lock before unlocking");
+        return UB_LOCK_ERROR;
     }
 
     uint64_t identify = make_global_owner(location.node_id, location.tid);
@@ -822,8 +864,9 @@ ub_lock_result_t DistributedLock::unlock_s(const ub_lock_policy_t &policy, const
     int expected = LocalLock::GLOBAL_HELD;
     local_lock->global_state_.compare_exchange_strong(expected, LocalLock::GLOBAL_IDLE, std::memory_order_acq_rel,
                                                       std::memory_order_acquire);
+    local_lock->global_pending_cv_.notify_all();
     local_lock->read_count.store(0, std::memory_order_release);
-    ret = local_lock->unlock_s();
+    ret = local_lock->unlock_s(location.tid);
     return ret;
 }
 

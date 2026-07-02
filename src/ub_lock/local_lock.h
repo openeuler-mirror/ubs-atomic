@@ -85,6 +85,48 @@ constexpr int32_t X_LOCK_HALF_DECR = 1 << 15; // 32768
 constexpr uint32_t SPIN_WAIT_ROUNDS = 30;
 constexpr uint64_t LOCK_INVALID_OWNER = static_cast<uint64_t>(255) << 32;
 
+// Four 16-bit lanes: 14-bit reader count + X sentinel; lane0/1 high bits hold SX/X flags.
+constexpr uint32_t LOCAL_LOCK_READER_LANES = 4;
+constexpr uint32_t LOCAL_LOCK_READER_LANE_BITS = 16;
+constexpr uint64_t LOCAL_LOCK_READER_COUNT_MASK = 0x3FFFu;
+constexpr uint64_t LOCAL_LOCK_READER_SENTINEL = 0x4000u;
+constexpr uint32_t LOCAL_LOCK_SX_LANE = 0;
+constexpr uint64_t LOCAL_LOCK_SX_FLAG = 0x8000uLL;
+constexpr uint64_t LOCAL_LOCK_X_FLAG = 0x8000uLL << LOCAL_LOCK_READER_LANE_BITS;
+
+constexpr uint64_t make_local_lock_lane_mask(uint64_t lane_mask)
+{
+    uint64_t mask = 0;
+    for (uint32_t i = 0; i < LOCAL_LOCK_READER_LANES; ++i) {
+        mask |= lane_mask << (i * LOCAL_LOCK_READER_LANE_BITS);
+    }
+    return mask;
+}
+
+constexpr uint64_t LOCAL_LOCK_READER_SENTINEL_MASK = make_local_lock_lane_mask(LOCAL_LOCK_READER_SENTINEL);
+constexpr uint64_t LOCAL_LOCK_X_STATE = LOCAL_LOCK_X_FLAG | LOCAL_LOCK_READER_SENTINEL_MASK;
+static_assert((LOCAL_LOCK_READER_LANES & (LOCAL_LOCK_READER_LANES - 1u)) == 0,
+              "reader lane count must be a power of two");
+
+inline uint32_t local_lock_lane_for_tid(int32_t tid) noexcept
+{
+    return static_cast<uint32_t>(tid) & (LOCAL_LOCK_READER_LANES - 1u);
+}
+
+inline uint16_t local_lock_lane_value(uint64_t state, uint32_t lane) noexcept
+{
+    return static_cast<uint16_t>((state >> (lane * LOCAL_LOCK_READER_LANE_BITS)) & 0xFFFFu);
+}
+
+inline uint32_t local_lock_reader_count(uint64_t state) noexcept
+{
+    uint32_t count = 0;
+    for (uint32_t lane = 0; lane < LOCAL_LOCK_READER_LANES; ++lane) {
+        count += static_cast<uint32_t>(local_lock_lane_value(state, lane) & LOCAL_LOCK_READER_COUNT_MASK);
+    }
+    return count;
+}
+
 using steady_time_point = std::chrono::steady_clock::time_point;
 // a lightweight cacheline padding wrapper for a single atomic
 template <class T>
@@ -94,6 +136,80 @@ struct alignas(UB_CACHELINE_SIZE) CachelineAtomic {
     constexpr CachelineAtomic(T init) noexcept : v(init) {}
     CachelineAtomic(const CachelineAtomic &) = delete;
     CachelineAtomic &operator=(const CachelineAtomic &) = delete;
+};
+
+// Local-only mixed-width state: S/SX use lane operations, X uses whole-word CAS.
+struct alignas(UB_CACHELINE_SIZE) LocalLockStateWord {
+    LocalLockStateWord() noexcept = default;
+    explicit constexpr LocalLockStateWord(uint64_t init) noexcept : word_(init) {}
+    LocalLockStateWord(const LocalLockStateWord &) = delete;
+    LocalLockStateWord &operator=(const LocalLockStateWord &) = delete;
+
+    uint64_t load(std::memory_order order = std::memory_order_acquire) const noexcept
+    {
+        return __atomic_load_n(const_cast<uint64_t *>(&word_), atomic_order(order));
+    }
+
+    void store(uint64_t value, std::memory_order order = std::memory_order_release) noexcept
+    {
+        __atomic_store_n(&word_, value, atomic_order(order));
+    }
+
+    bool compare_exchange_weak(uint64_t &expected, uint64_t desired, std::memory_order success,
+                               std::memory_order failure) noexcept
+    {
+        return __atomic_compare_exchange_n(&word_, &expected, desired, true, atomic_order(success),
+                                           atomic_order(failure));
+    }
+
+    bool compare_exchange_lane_weak(uint32_t lane, uint16_t &expected, uint16_t desired, std::memory_order success,
+                                    std::memory_order failure) noexcept
+    {
+        return __atomic_compare_exchange_n(lane_ptr(lane), &expected, desired, true, atomic_order(success),
+                                           atomic_order(failure));
+    }
+
+    bool compare_exchange_lane_strong(uint32_t lane, uint16_t &expected, uint16_t desired, std::memory_order success,
+                                      std::memory_order failure) noexcept
+    {
+        return __atomic_compare_exchange_n(lane_ptr(lane), &expected, desired, false, atomic_order(success),
+                                           atomic_order(failure));
+    }
+
+    uint16_t fetch_and_lane(uint32_t lane, uint16_t mask, std::memory_order order) noexcept
+    {
+        return __atomic_fetch_and(lane_ptr(lane), mask, atomic_order(order));
+    }
+
+private:
+    static int atomic_order(std::memory_order order) noexcept
+    {
+        switch (order) {
+            case std::memory_order_relaxed:
+                return __ATOMIC_RELAXED;
+            case std::memory_order_consume:
+            case std::memory_order_acquire:
+                return __ATOMIC_ACQUIRE;
+            case std::memory_order_release:
+                return __ATOMIC_RELEASE;
+            case std::memory_order_acq_rel:
+                return __ATOMIC_ACQ_REL;
+            case std::memory_order_seq_cst:
+            default:
+                return __ATOMIC_SEQ_CST;
+        }
+    }
+
+    uint16_t *lane_ptr(uint32_t lane) noexcept
+    {
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+        return reinterpret_cast<uint16_t *>(&word_) + (LOCAL_LOCK_READER_LANES - 1u - lane);
+#else
+        return reinterpret_cast<uint16_t *>(&word_) + lane;
+#endif
+    }
+
+    alignas(sizeof(uint64_t)) uint64_t word_{0};
 };
 
 struct local_wait_ctx_t {
@@ -195,10 +311,10 @@ public:
     ~LocalLock() = default;
 
     ub_lock_result_t lock_s(int32_t tid, steady_time_point deadline);
-    ub_lock_result_t lock_sx(bool allow_recursive, int32_t tid, steady_time_point deadliney);
+    ub_lock_result_t lock_sx(bool allow_recursive, int32_t tid, steady_time_point deadline);
     ub_lock_result_t lock_x(bool allow_recursive, int32_t tid, steady_time_point deadline);
 
-    ub_lock_result_t unlock_s();
+    ub_lock_result_t unlock_s(int32_t tid);
     ub_lock_result_t unlock_sx(bool allow_recursive, int32_t tid);
     ub_lock_result_t unlock_x(bool allow_recursive, int32_t tid);
 
@@ -221,7 +337,7 @@ public:
     bool try_begin_remote_release();
     bool try_inc_global_ref();
 
-    CachelineAtomic<int32_t> lock_word{0};
+    LocalLockStateWord lock_word{};
     CachelineAtomic<uint32_t> q_head{0};
     CachelineAtomic<uint32_t> q_tail{0};
     std::atomic<uint32_t> waiting_count{0};

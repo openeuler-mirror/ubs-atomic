@@ -59,6 +59,35 @@ Ubs-atomic supports distributed atomic services such as distributed locks and qu
 - `ub_dist_lock` 内部会借助通信队列完成跨节点唤醒和释放通知。
 - `ub_dist_tx_res` 不依赖通信队列，只要求调用方提供 8 字节对齐的共享内存地址。
 
+### 安全假设和约束
+
+UBS Atomic基于UB共享内存池实现，假设应用场景的安全威胁模型和UB共享内存池一致，比如共享内存池内的内存访问是可信的。
+
+UBS Atomic 本身仅接收共享内存地址并对其中的数据结构进行操作，不负责共享内存池的创建、生命周期管理、访问控制。因此，UBS Atomic 的正确性和安全性依赖于调用方提供的UB共享内存池，调用方需至少保证：
+1) 共享内存池可被所有参与节点一致访问；
+2) 共享内存仅授权给必要的用户，不会被非授权实体提权读写；
+3) 共享内存状态对所有节点保持一致可见；
+4) 底层原子操作（CAS 等）满足全局线性化语义。
+
+UBS Atomic安全假设和DSM DB、CXL Shared Lock等业界类似，依赖共享内存安全性，共同的依赖有：
+1）通过共享状态和原子操作实现资源仲裁；
+2）系统正确性依赖于共享内存上共享状态的可信性；
+3）需要保证共享状态的一致可见性以及原子操作的正确性。
+
+### 安全威胁分析
+
+根据攻击路径模型和韧性控制点梳理，针对高风险架构元素威胁分析和消减措施如下：
+共享内存的威胁风险和消减措施如下：
+
+| 架构元素 | 威胁分析说明 | 消减措施 | 备注 |
+| --- | --- | --- | --- |
+| shared memory | 仿冒：恶意进程伪装成合法的通信方，通过猜测或窃听获知共享内存的名称和结构，从而链接到管道，冒充发送方或接收方。 | 共享内存创建时指定权限为 `600`，只有属主进程能够访问，避免低权限或其他用户的进程访问共享内存; <br>共享内存名称 `Name` 随机生成，避免被攻击者猜测到，避免被提前创建或恶意接入共享内存。<br>共享内存名称 `Name` 通过可信通信如 TCP/TLS 通信交换，避免被攻击者获取到，避免被提前创建或恶意接入共享内存。 | 通过权限访问控制和通信协议身份认证保证合法接入共享内存。<br>由上层应用负责共享内存的创建 |
+|  | 篡改：恶意进程任意篡改共享内存的数据，接收方无法区分数据是来自真实的发送方还是被中间人篡改过。 | 共享内存发送方和接收方使用密钥对通信消息进行加密和解密，防止数据被篡改。 | 由上层应用负责消息完整性保护。<br>UBS Atomic 只提供消息的发送和接收能力。 |
+|  | 信息泄露：恶意进程通过访问共享内存读取包含敏感信息的通信内容。 |  | 由上层应用负责消息加密和解密。 |
+|  | 拒绝服务-资源耗尽：恶意进程可以疯狂写入数据，占满共享内存空间，导致合法通信无法进行。 | UBS Atomic 提供消息流控机制，支持配置消息队列拥塞阈值，当目标节点队列环消息堆积超过阈值时返回消息拥塞；当目标节点环满时返回发送消息失败。 | UBS Atomic 本身无法完全防止 DoS 攻击。 |
+|  | 拒绝服务-破坏同步原语：攻击者可以破坏用于保护共享内存的锁或信号量，使通信双方陷入死锁或活锁。 | UBS Atomic 基于 UB 共享内存实现无锁多生产者单消费者消息队列，增强系统容错与高可用能力，支持消息队列故障恢复机制，避免死锁。 | 通过上层业务的权限访问控制和身份认证保证合法接入。 |
+|  | 拒绝服务-销毁资源：恶意进程可以故意调用解除共享内存映射或销毁共享内存等操作，导致共享内存被提前分离或销毁。 | 通过共享内存的权限控制和身份认证保证只有合法用户能直接操作共享内存。 |
+
 ## 目录结构
 
 ```text
@@ -201,11 +230,12 @@ int main()
 
 ### 2. 分布式读写锁
 
-适用于跨节点读写互斥。锁对象本身必须放在一块所有参与节点都能映射到的共享内存中，并至少预留 `UB_RW_LOCK_SIZE` 字节。详细步骤可参考[sample_code](sample_code/ub_lock/README.md)。
+适用于跨节点读写互斥。锁对象本身必须放在一块所有参与节点都能映射到的共享内存中，并至少预留 `UB_RW_LOCK_SIZE` 字节。分布式读写锁的跨节点唤醒、延迟释放通知依赖 `ub_dist_comm_queue`，因此调用方必须先初始化通信队列，再创建和使用锁。详细步骤可参考[sample_code](sample_code/ub_lock/README.md)。
 
 ```cpp
 #include <array>
 #include <cstddef>
+#include "ub_dist_comm_queue.h"
 #include "ub_dist_lock.h"
 
 alignas(64) std::array<std::byte, UB_RW_LOCK_SIZE> lock_mem{};
@@ -217,6 +247,17 @@ int main()
     ub_lock_config_t config{.lease_time = 60000, .heartbeat_timeout = 500};
     ub_lock_policy_t policy{.timeout_ts = 1000, .allow_delay_release = false, .recursive = false};
 
+    // 前置条件：所有参与节点必须先完成通信队列初始化，并保持 handle 存活。
+    // init_region、ring_map、comm_conf 需要由调用方按集群节点和共享内存布局提前构造。
+    ub_shm_comm_t comm_handle = nullptr;
+    ub_shm_area_t init_region{};
+    ub_ring_region_map_t ring_map{};
+    ub_comm_conf_t comm_conf{};
+    comm_conf.current_node_id = self.node_id;
+    if (ub_comm_queue_init(&comm_handle, &init_region, &ring_map, &comm_conf) != 0) {
+        return 1;
+    }
+
     ub_rw_lock_create(lock, &config, &self);
 
     if (ub_rw_lock_x_lock(lock, &policy, &self) == UB_LOCK_SUCCESS) {
@@ -225,6 +266,7 @@ int main()
     }
 
     ub_rw_lock_free(lock, &self);
+    ub_comm_queue_deinit(&comm_handle);
     return 0;
 }
 ```
@@ -345,7 +387,8 @@ int main()
 - `recursive=true` 只适用于同一线程重复持锁场景。
 #### 参数约束与实现限制
 - `location.node_id`、`process_id` 有效范围是 [0,16)。
-- 锁会借助通信队列完成跨节点唤醒和释放通知，因此锁的生命周期一定要在通信队列实例生命周期内。
+- 锁会借助通信队列完成跨节点唤醒和释放通知；每个参与节点都必须先完成 `ub_comm_queue_init`，再调用 `ub_rw_lock_create`，并保证锁的生命周期处在通信队列实例生命周期内。
+- 通信队列的 `init_region`、节点 Ring 映射、`current_node_id`/`max_nodes` 等配置必须跨节点一致；若队列未初始化或节点间映射不一致，跨节点等待者可能无法收到唤醒/释放消息，表现为加锁超时或失败。
 - `ub_rw_lock_recover`接口内部无法判断传入的进程是否异常
 - 进程故障发送后，集群服务能获取故障进程ID，集群服务从正常进程中选出一个来调用分布式锁提供`ub_rw_lock_recover`的接口进行故障恢复，恢复流程完成后，集群服务才可重启故障进程。
 
