@@ -27,6 +27,36 @@
 
 两个节点必须映射同一组共享内存（名称相同），由 `--role` 决定自身角色。
 
+### 创建共享内存
+
+运行 pingpong 前，先用 `sample_code/share_mem/ubsm_shm_creator` 创建两个默认共享内存。下面以两节点 `computer01`、`computer02` 为例，主机名请按实际环境替换。
+
+```bash
+cd ../share_mem
+vi ubsm_region.conf
+```
+
+`ubsm_region.conf` 示例：
+
+```ini
+request_size_mb=1024
+hosts=computer01,computer02
+```
+
+编译并创建共享内存：
+
+```bash
+g++ -std=c++17 ubsm_shm_creator.cpp -I/usr/local/ubs_mem/include -L/usr/local/ubs_mem/lib -lubsm_sdk -o ubsm_shm_creator
+export LD_LIBRARY_PATH=/usr/local/ubs_mem/lib:$LD_LIBRARY_PATH
+
+./ubsm_shm_creator create computer01 shm_node0_export
+./ubsm_shm_creator create computer02 shm_node1_export
+```
+
+如果运行 pingpong 时通过 `-0`、`-1` 指定了其他共享内存名，需要提前创建对应名字。
+
+如果同一环境中已经按锁样例创建过 `shm_node1_export`，建议给 pingpong 使用独立名字，例如先创建 `shm_ping_node0_export`、`shm_ping_node1_export`，启动时增加 `-0 shm_ping_node0_export -1 shm_ping_node1_export`。
+
 ## 依赖
 
 本 demo 依赖以下库：
