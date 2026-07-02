@@ -69,10 +69,41 @@ g++ -O2 -g -std=c++17 -o ub_dist_lock_func_test ub_dist_lock_func_test.cpp \
 
 ### 创建共享内存
 
-* ubsmem daemon/服务已启动
-* 映射的共享内存名称/路径可被 `ubsmem_shmem_map` 正确识别
-* 创建`shm_sender_128`、`shm_receiver_128` ubsm共享内存用于消息队列（名字可支持启动时传入）
-* 创建分布式锁的共享内存，并将name从测试脚本中传入 `<path>`
+运行锁样例前，必须先用 `sample_code/share_mem/ubsm_shm_creator` 创建锁对象和通信队列使用的共享内存。下面以两节点 `computer01`、`computer02` 为例，主机名请按实际环境替换。
+
+```bash
+cd ../share_mem
+vi ubsm_region.conf
+```
+
+`ubsm_region.conf` 示例：
+
+```ini
+request_size_mb=1024
+hosts=computer01,computer02
+```
+
+编译并创建默认共享内存：
+
+```bash
+g++ -std=c++17 ubsm_shm_creator.cpp -I/usr/local/ubs_mem/include -L/usr/local/ubs_mem/lib -lubsm_sdk -o ubsm_shm_creator
+export LD_LIBRARY_PATH=/usr/local/ubs_mem/lib:$LD_LIBRARY_PATH
+
+./ubsm_shm_creator create computer01 shm_ub_lock
+./ubsm_shm_creator create computer01 shm_node1_export
+./ubsm_shm_creator create computer02 shm_node2_export
+```
+
+这三个名字要和 `dw_lock.conf` 保持一致：
+
+```ini
+lock_shm=shm_ub_lock
+shm.NodeA=shm_node1_export
+shm.NodeB=shm_node2_export
+```
+
+如果 `dw_lock.conf` 中改了共享内存名，需要先创建修改后的名字，再启动测试程序。
+
 ---
 
 ## 5. 运行方式

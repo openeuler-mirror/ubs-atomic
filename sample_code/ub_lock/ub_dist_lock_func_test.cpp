@@ -43,13 +43,13 @@
 #include "ub_dist_comm_queue.h"
 #include "ubs_mem.h"
 #include "ubs_mem_def.h"
-//
+
 #include <errno.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/types.h>
 #include "ub_dist_lock.h"
-// POSIX
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <stdarg.h>
@@ -617,8 +617,7 @@ int dw_queue_init(const DwConfig &cfg)
         return -1;
     }
 
-    // ====== ======
-    const size_t kPerHandlerInitRegionSize = 1024 * 1024; // 1KB
+    const size_t kPerHandlerInitRegionSize = 1024 * 1024; // 1MB
     const size_t RING_SIZE = 1376640;
 
     const size_t unaligned_handler_size = kPerHandlerInitRegionSize + RING_SIZE;
@@ -767,7 +766,6 @@ int main(int argc, char *argv[])
     ub_atomic_set_log_level(LOG_LEVEL_INFO);
     ub_atomic_register_log_func(my_stdout_logger);
 
-    //    std::string conf_path = (argc >= 2) ? argv[1] : "dw_lock.conf";
     std::string conf_path = "dw_lock.conf";
     DwConfig cfg;
     std::string err;
