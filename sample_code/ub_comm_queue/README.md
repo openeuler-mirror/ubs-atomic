@@ -34,16 +34,9 @@
 | 依赖 | 说明 |
 |------|------|
 | **libubs-atomic.so** | ubs-atomic 通信队列库（本项目编译产物） |
-| **ubs_mem_stub** | 共享内存抽象层，提供 `ubs_mem.h` / `ubs_mem_def.h` 头文件及 `libubs_mem_stub.so` 库 |
+| **ubsm** | 共享内存抽象层，提供 `ubs_mem.h` / `ubs_mem_def.h` 头文件及 `libubsmd.so` 库 |
 
-> `ubs_mem_stub` 提供共享内存的初始化（`ubsmem_init_attributes`、`ubsmem_initialize`）、区域查找（`ubsmem_lookup_regions`）和映射（`ubsmem_shmem_map`）等接口，是 pingpong demo 与底层共享内存交互的必要桥梁。
-
-### 安装 ubs_mem_stub
-
-请按照 ubs_mem_stub 项目自身的构建说明进行编译安装。安装完成后需确保：
-
-- 头文件 `ubs_mem.h`、`ubs_mem_def.h` 位于系统 include 路径或可通过 `-I` 指定
-- 共享库 `libubs_mem_stub.so` 位于系统 lib 路径或可通过 `-L` 指定
+> `ubsm` 提供共享内存的初始化（`ubsmem_init_attributes`、`ubsmem_initialize`）、区域查找（`ubsmem_lookup_regions`）和映射（`ubsmem_shmem_map`）等接口，是 pingpong demo 与底层共享内存交互的必要桥梁。
 
 ## 编译
 
