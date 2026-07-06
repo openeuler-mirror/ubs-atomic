@@ -877,7 +877,109 @@ void spin_lock_example(void)
 | `value` | `uint64_t` | 原子增加值 | 任意 `uint64_t` 值，溢出按无符号整数规则回绕 |
 | `out_val` | `uint64_t *` | 输出加法前旧值 | 非空 |
 
-**使用样例**
+### 4.6 `ub_dist_tx_res_fence_acquire`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_dist_tx_res_fence_acquire` |
+| 接口描述 | Acquire 内存屏障，确保屏障之后的所有读操作不会被重排到屏障之前。用于 MPI_Win_lock 进入时，保证能看到之前 release 写的所有数据。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_dist_tx_res_fence_acquire(void);` |
+| 返回参数 | 成功返回 `UB_RES_OK`（当前实现始终成功，保留返回值为将来扩展）。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| （无） | — | fence 是线程级操作，不绑定特定地址 | — |
+
+**约束与注意事项**
+
+- 对应 `memory_order_acquire`。
+- 线程安全：是（fence 仅约束调用线程自身的内存访问序）。
+- 幂等性：连续多次调用等价于单次屏障。
+
+### 4.7 `ub_dist_tx_res_fence_release`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_dist_tx_res_fence_release` |
+| 接口描述 | Release 内存屏障，确保屏障之前的所有写操作不会被重排到屏障之后。用于 MPI_Win_unlock 退出时，保证本窗口内所有写操作对外可见。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_dist_tx_res_fence_release(void);` |
+| 返回参数 | 成功返回 `UB_RES_OK`（当前实现始终成功，保留返回值为将来扩展）。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| （无） | — | fence 是线程级操作，不绑定特定地址 | — |
+
+**约束与注意事项**
+
+- 对应 `memory_order_release`。
+- 线程安全：是（fence 仅约束调用线程自身的内存访问序）。
+- 幂等性：连续多次调用等价于单次屏障。
+
+### 4.8 `ub_dist_tx_res_fence_acq_rel`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_dist_tx_res_fence_acq_rel` |
+| 接口描述 | Acquire-Release 双向内存屏障，同时具有 acquire 和 release 语义。用于 MPI_Win_fence 等同步点，需双向同步的场景。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_dist_tx_res_fence_acq_rel(void);` |
+| 返回参数 | 成功返回 `UB_RES_OK`（当前实现始终成功，保留返回值为将来扩展）。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| （无） | — | fence 是线程级操作，不绑定特定地址 | — |
+
+**约束与注意事项**
+
+- 对应 `memory_order_acq_rel`。
+- 线程安全：是（fence 仅约束调用线程自身的内存访问序）。
+- 幂等性：连续多次调用等价于单次屏障。
+
+### 4.9 `ub_dist_tx_res_fence_seq_cst`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_dist_tx_res_fence_seq_cst` |
+| 接口描述 | Sequential Consistency 全局序一致屏障，最强屏障，保证所有线程/进程观察到的操作序一致。用于需要全局一致视图的严格同步场景。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_dist_tx_res_fence_seq_cst(void);` |
+| 返回参数 | 成功返回 `UB_RES_OK`（当前实现始终成功，保留返回值为将来扩展）。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| （无） | — | fence 是线程级操作，不绑定特定地址 | — |
+
+**约束与注意事项**
+
+- 对应 `memory_order_seq_cst`。
+- 线程安全：是（fence 仅约束调用线程自身的内存访问序）。
+- 幂等性：连续多次调用等价于单次最强屏障。
+
+### 4.10 `ub_dist_tx_res_add`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_dist_tx_res_add` |
+| 接口描述 | 对分布式事务资源执行原子加法（无 fetch 版本），将 value 原子地加到 handle 指向的共享内存位置，不返回旧值。使用 `memory_order_release` 语义，适用于 MPI_Accumulate(MPI_SUM) 等仅需累加不需旧值的场景。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_dist_tx_res_add(uint64_t *handle, uint64_t value);` |
+| 返回参数 | 成功返回 `UB_RES_OK`；`handle` 为 `NULL` 或地址未 8 字节对齐返回 `UB_RES_ERROR`。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `handle` | `uint64_t *` | 指向目标共享内存位置的指针 | 非空，且 8 字节对齐 |
+| `value` | `uint64_t` | 要累加的 64 位无符号整数值 | 任意 `uint64_t` 值，溢出按无符号整数规则回绕 |
+
+**约束与注意事项**
+
+- 与 `ub_dist_tx_res_fetch_add` 的区别：本接口不返回旧值，硬件可优化为更轻量的指令（ARM64: `STADD` vs `LDADD`）；使用 `release` 语义（`fetch_add` 使用 `acq_rel`），因无需读回的 acquire 保证。
+- 加法为 `uint64_t` 模算术，溢出时回绕（wrap-around），不产生错误。
+- 若需要获取加法以前的旧值，请使用 `ub_dist_tx_res_fetch_add`。
+- 在 NC（远端非缓存）场景下，add 操作完成后如需保证远端可见性，应配合 `ub_dist_tx_res_fence_release()` 使用。
+
+### 4.11 事务资源使用样例
 
 ```c
 #include "ub_dist_tx_res.h"
