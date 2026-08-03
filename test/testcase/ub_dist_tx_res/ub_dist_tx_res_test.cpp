@@ -110,7 +110,7 @@ TEST(DistTxFenceTest, FenceRelaxedCompilerBarrierTest)
 
     std::thread writer([&]() {
         ub_dist_tx_res_set(&data, 77);
-        ub_dist_tx_res_fence(UB_FENCE_RELAXED);  // 仅编译器屏障
+        ub_dist_tx_res_fence(UB_FENCE_RELAXED); // 仅编译器屏障
         ub_dist_tx_res_set(&flag, 1);
     });
     std::thread reader([&]() {
@@ -123,7 +123,7 @@ TEST(DistTxFenceTest, FenceRelaxedCompilerBarrierTest)
         ub_dist_tx_res_get(&data, &d);
         // relaxed 不保证硬件保序，但 get() 内部使用 acquire 语义
         // 此处验证 relaxed 不崩溃且流程正常完成
-        EXPECT_TRUE(d == 77 || d == 0);  // 允许两种结果
+        EXPECT_TRUE(d == 77 || d == 0); // 允许两种结果
     });
     writer.join();
     reader.join();
@@ -299,7 +299,7 @@ TEST(DistTxCasTest, CompareExchangeFailTest)
     EXPECT_EQ(ub_dist_tx_res_init(&val), UB_RES_OK);
     EXPECT_EQ(ub_dist_tx_res_set(&val, 42), UB_RES_OK);
 
-    uint64_t expected = 99;  // 不匹配当前值42
+    uint64_t expected = 99; // 不匹配当前值42
     int success = 0;
     EXPECT_EQ(ub_dist_tx_res_compare_exchange(&val, &expected, 100, &success), UB_RES_OK);
     EXPECT_EQ(success, 0);

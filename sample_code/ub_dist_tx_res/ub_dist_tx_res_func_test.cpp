@@ -13,31 +13,41 @@
  *   ./ub_dist_tx_res_func_test
  */
 
+#include <atomic>
+#include <chrono>
+#include <cinttypes>
+#include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdint>
-#include <cstdarg>
-#include <cinttypes>
 #include <thread>
 #include <vector>
-#include <atomic>
-#include <chrono>
 #include "ub_dist_tx_res.h"
 
 /* ===================== 日志注册 ===================== */
 
-static int my_stdout_logger(int level, const char *file, const char *func,
-                            uint32_t line, const char *message)
+static int my_stdout_logger(int level, const char *file, const char *func, uint32_t line, const char *message)
 {
     const char *level_str = "UNKNOWN";
     switch (level) {
-        case LOG_LEVEL_DEBUG:    level_str = "DEBUG";    break;
-        case LOG_LEVEL_INFO:     level_str = "INFO";     break;
-        case LOG_LEVEL_WARN:     level_str = "WARN";     break;
-        case LOG_LEVEL_ERROR:    level_str = "ERROR";    break;
-        case LOG_LEVEL_CRITICAL: level_str = "CRITICAL"; break;
-        default: break;
+        case LOG_LEVEL_DEBUG:
+            level_str = "DEBUG";
+            break;
+        case LOG_LEVEL_INFO:
+            level_str = "INFO";
+            break;
+        case LOG_LEVEL_WARN:
+            level_str = "WARN";
+            break;
+        case LOG_LEVEL_ERROR:
+            level_str = "ERROR";
+            break;
+        case LOG_LEVEL_CRITICAL:
+            level_str = "CRITICAL";
+            break;
+        default:
+            break;
     }
     time_t now = time(nullptr);
     char *ts = ctime(&now);
@@ -48,33 +58,31 @@ static int my_stdout_logger(int level, const char *file, const char *func,
 
 /* ===================== 辅助宏与函数 ===================== */
 
-#define SEPARATOR  "------------------------------------------------------------"
+#define SEPARATOR "------------------------------------------------------------"
 #define HEADER_SEP "============================================================"
 
-#define CHECK_EQ(desc, actual, expect)                                       \
-    do {                                                                     \
-        uint64_t _a = (actual), _e = (expect);                              \
-        if (_a == _e) {                                                      \
-            printf("  [PASS] %-40s  (值=%" PRIu64 ")\n", (desc), _a);       \
-            pass_cnt++;                                                      \
-        } else {                                                             \
-            printf("  [FAIL] %-40s  (实际=%" PRIu64 ", 期望=%" PRIu64 ")\n",\
-                   (desc), _a, _e);                                          \
-            fail_cnt++;                                                      \
-        }                                                                    \
+#define CHECK_EQ(desc, actual, expect)                                                        \
+    do {                                                                                      \
+        uint64_t _a = (actual), _e = (expect);                                                \
+        if (_a == _e) {                                                                       \
+            printf("  [PASS] %-40s  (值=%" PRIu64 ")\n", (desc), _a);                         \
+            pass_cnt++;                                                                       \
+        } else {                                                                              \
+            printf("  [FAIL] %-40s  (实际=%" PRIu64 ", 期望=%" PRIu64 ")\n", (desc), _a, _e); \
+            fail_cnt++;                                                                       \
+        }                                                                                     \
     } while (0)
 
-#define CHECK_RES(desc, actual, expect)                                      \
-    do {                                                                     \
-        int _a = (actual), _e = (expect);                                   \
-        if (_a == _e) {                                                      \
-            printf("  [PASS] %-40s  (ret=%d)\n", (desc), _a);               \
-            pass_cnt++;                                                      \
-        } else {                                                             \
-            printf("  [FAIL] %-40s  (实际ret=%d, 期望ret=%d)\n",            \
-                   (desc), _a, _e);                                          \
-            fail_cnt++;                                                      \
-        }                                                                    \
+#define CHECK_RES(desc, actual, expect)                                           \
+    do {                                                                          \
+        int _a = (actual), _e = (expect);                                         \
+        if (_a == _e) {                                                           \
+            printf("  [PASS] %-40s  (ret=%d)\n", (desc), _a);                     \
+            pass_cnt++;                                                           \
+        } else {                                                                  \
+            printf("  [FAIL] %-40s  (实际ret=%d, 期望ret=%d)\n", (desc), _a, _e); \
+            fail_cnt++;                                                           \
+        }                                                                         \
     } while (0)
 
 static void print_summary(const char *name, int pass_cnt, int fail_cnt)
@@ -83,8 +91,7 @@ static void print_summary(const char *name, int pass_cnt, int fail_cnt)
     if (fail_cnt == 0)
         printf("[PASS] %s 全部通过 (%d/%d)\n", name, pass_cnt, pass_cnt + fail_cnt);
     else
-        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, fail_cnt,
-               pass_cnt, pass_cnt + fail_cnt);
+        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, fail_cnt, pass_cnt, pass_cnt + fail_cnt);
     printf(HEADER_SEP "\n\n");
 }
 
@@ -469,8 +476,7 @@ static void scenario_overflow_wrap(void)
     uint64_t old = 0;
     ub_dist_tx_res_fetch_add(&val, 1, &old);
     ub_dist_tx_res_get(&val, &out);
-    printf("  fetch_add(UINT64_MAX, 1): old=0x%016" PRIx64 ", new=0x%016" PRIx64 "\n",
-           old, out);
+    printf("  fetch_add(UINT64_MAX, 1): old=0x%016" PRIx64 ", new=0x%016" PRIx64 "\n", old, out);
     CHECK_EQ("fetch_add 旧值 == UINT64_MAX", old, UINT64_MAX);
     CHECK_EQ("fetch_add 溢出后 == 0", out, 0);
 
@@ -489,47 +495,31 @@ static void scenario_error_handling(void)
     uint64_t out = 0;
 
     printf("  ---- NULL 指针测试 ----\n");
-    CHECK_RES("init(NULL) 返回 ERROR",
-              ub_dist_tx_res_init(nullptr), UB_RES_ERROR);
-    CHECK_RES("set(NULL, 1) 返回 ERROR",
-              ub_dist_tx_res_set(nullptr, 1), UB_RES_ERROR);
-    CHECK_RES("get(NULL, &out) 返回 ERROR",
-              ub_dist_tx_res_get(nullptr, &out), UB_RES_ERROR);
-    CHECK_RES("fetch_add(NULL, 1, &out) 返回 ERROR",
-              ub_dist_tx_res_fetch_add(nullptr, 1, &out), UB_RES_ERROR);
-    CHECK_RES("add(NULL, 1) 返回 ERROR",
-              ub_dist_tx_res_add(nullptr, 1), UB_RES_ERROR);
+    CHECK_RES("init(NULL) 返回 ERROR", ub_dist_tx_res_init(nullptr), UB_RES_ERROR);
+    CHECK_RES("set(NULL, 1) 返回 ERROR", ub_dist_tx_res_set(nullptr, 1), UB_RES_ERROR);
+    CHECK_RES("get(NULL, &out) 返回 ERROR", ub_dist_tx_res_get(nullptr, &out), UB_RES_ERROR);
+    CHECK_RES("fetch_add(NULL, 1, &out) 返回 ERROR", ub_dist_tx_res_fetch_add(nullptr, 1, &out), UB_RES_ERROR);
+    CHECK_RES("add(NULL, 1) 返回 ERROR", ub_dist_tx_res_add(nullptr, 1), UB_RES_ERROR);
     // get(handle, NULL) 也应返回错误
     uint64_t valid_val = 0;
     ub_dist_tx_res_init(&valid_val);
-    CHECK_RES("get(valid, NULL) 返回 ERROR",
-              ub_dist_tx_res_get(&valid_val, nullptr), UB_RES_ERROR);
-    CHECK_RES("fetch_add(valid, 1, NULL) 返回 ERROR",
-              ub_dist_tx_res_fetch_add(&valid_val, 1, nullptr), UB_RES_ERROR);
+    CHECK_RES("get(valid, NULL) 返回 ERROR", ub_dist_tx_res_get(&valid_val, nullptr), UB_RES_ERROR);
+    CHECK_RES("fetch_add(valid, 1, NULL) 返回 ERROR", ub_dist_tx_res_fetch_add(&valid_val, 1, nullptr), UB_RES_ERROR);
 
     printf("\n  ---- 未对齐地址测试 ----\n");
     // 构造一个未8字节对齐的地址
     uint64_t *unaligned = reinterpret_cast<uint64_t *>(0x7ffee3b5a001);
-    CHECK_RES("init(未对齐) 返回 ERROR",
-              ub_dist_tx_res_init(unaligned), UB_RES_ERROR);
-    CHECK_RES("set(未对齐, 1) 返回 ERROR",
-              ub_dist_tx_res_set(unaligned, 1), UB_RES_ERROR);
-    CHECK_RES("get(未对齐, &out) 返回 ERROR",
-              ub_dist_tx_res_get(unaligned, &out), UB_RES_ERROR);
-    CHECK_RES("fetch_add(未对齐, 1, &out) 返回 ERROR",
-              ub_dist_tx_res_fetch_add(unaligned, 1, &out), UB_RES_ERROR);
-    CHECK_RES("add(未对齐, 1) 返回 ERROR",
-              ub_dist_tx_res_add(unaligned, 1), UB_RES_ERROR);
+    CHECK_RES("init(未对齐) 返回 ERROR", ub_dist_tx_res_init(unaligned), UB_RES_ERROR);
+    CHECK_RES("set(未对齐, 1) 返回 ERROR", ub_dist_tx_res_set(unaligned, 1), UB_RES_ERROR);
+    CHECK_RES("get(未对齐, &out) 返回 ERROR", ub_dist_tx_res_get(unaligned, &out), UB_RES_ERROR);
+    CHECK_RES("fetch_add(未对齐, 1, &out) 返回 ERROR", ub_dist_tx_res_fetch_add(unaligned, 1, &out), UB_RES_ERROR);
+    CHECK_RES("add(未对齐, 1) 返回 ERROR", ub_dist_tx_res_add(unaligned, 1), UB_RES_ERROR);
 
     printf("\n  ---- fence 各变体返回值测试 ----\n");
-    CHECK_RES("fence_acquire() 返回 OK",
-              ub_dist_tx_res_fence(UB_FENCE_ACQUIRE), UB_RES_OK);
-    CHECK_RES("fence_release() 返回 OK",
-              ub_dist_tx_res_fence(UB_FENCE_RELEASE), UB_RES_OK);
-    CHECK_RES("fence_acq_rel() 返回 OK",
-              ub_dist_tx_res_fence(UB_FENCE_ACQ_REL), UB_RES_OK);
-    CHECK_RES("fence_seq_cst() 返回 OK",
-              ub_dist_tx_res_fence(UB_FENCE_SEQ_CST), UB_RES_OK);
+    CHECK_RES("fence_acquire() 返回 OK", ub_dist_tx_res_fence(UB_FENCE_ACQUIRE), UB_RES_OK);
+    CHECK_RES("fence_release() 返回 OK", ub_dist_tx_res_fence(UB_FENCE_RELEASE), UB_RES_OK);
+    CHECK_RES("fence_acq_rel() 返回 OK", ub_dist_tx_res_fence(UB_FENCE_ACQ_REL), UB_RES_OK);
+    CHECK_RES("fence_seq_cst() 返回 OK", ub_dist_tx_res_fence(UB_FENCE_SEQ_CST), UB_RES_OK);
 
     print_summary("场景10: 错误处理验证", pass_cnt, fail_cnt);
 }
@@ -594,8 +584,7 @@ static void scenario_concurrent_fetch_add(void)
     // 每次 fetch_add(1) 返回加之前的值，所有旧值之和 = 0+1+2+...+(N-1) = N*(N-1)/2
     uint64_t N = (uint64_t)NUM_THREADS * OPS_PER_THREAD;
     uint64_t expected_old_sum = N * (N - 1) / 2;
-    printf("  所有旧值之和: %" PRIu64 "  (期望: %" PRIu64 ")\n",
-           total_old_sum, expected_old_sum);
+    printf("  所有旧值之和: %" PRIu64 "  (期望: %" PRIu64 ")\n", total_old_sum, expected_old_sum);
     CHECK_EQ("旧值之和 == N*(N-1)/2", total_old_sum, expected_old_sum);
 
     print_summary("场景11: 多线程并发 fetch_add 原子性验证", pass_cnt, fail_cnt);
@@ -727,19 +716,45 @@ int main(int argc, char *argv[])
         }
 
         switch (choice) {
-            case 1:  scenario_basic();                  break;
-            case 2:  scenario_add();                    break;
-            case 3:  scenario_fetch_add_vs_add();       break;
-            case 4:  scenario_concurrent_add();         break;
-            case 5:  scenario_fence_release_acquire();  break;
-            case 6:  scenario_fence_seq_cst();          break;
-            case 7:  scenario_fence_acq_rel();          break;
-            case 8:  scenario_add_fence_combo();        break;
-            case 9:  scenario_overflow_wrap();          break;
-            case 10: scenario_error_handling();         break;
-            case 11: scenario_concurrent_fetch_add();   break;
-            case 12: scenario_fence_stress();           break;
-            case 99: run_all_scenarios();               break;
+            case 1:
+                scenario_basic();
+                break;
+            case 2:
+                scenario_add();
+                break;
+            case 3:
+                scenario_fetch_add_vs_add();
+                break;
+            case 4:
+                scenario_concurrent_add();
+                break;
+            case 5:
+                scenario_fence_release_acquire();
+                break;
+            case 6:
+                scenario_fence_seq_cst();
+                break;
+            case 7:
+                scenario_fence_acq_rel();
+                break;
+            case 8:
+                scenario_add_fence_combo();
+                break;
+            case 9:
+                scenario_overflow_wrap();
+                break;
+            case 10:
+                scenario_error_handling();
+                break;
+            case 11:
+                scenario_concurrent_fetch_add();
+                break;
+            case 12:
+                scenario_fence_stress();
+                break;
+            case 99:
+                run_all_scenarios();
+                break;
             case 0:
                 printf("退出验证 Demo，再见。\n");
                 return 0;

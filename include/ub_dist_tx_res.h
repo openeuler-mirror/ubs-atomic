@@ -67,7 +67,8 @@ int ub_dist_tx_res_fetch_add(uint64_t *handle, uint64_t value, uint64_t *out_val
 /**
  * @brief 内存屏障语义枚举，对应 C11/C++11 memory_order。
  */
-typedef enum {
+typedef enum
+{
     UB_FENCE_RELAXED = 0, /**< 仅编译器屏障，不生成硬件 fence 指令 */
     UB_FENCE_ACQUIRE = 1, /**< Acquire: 后续读不可前移 (ARM64: dmb ishld) */
     UB_FENCE_RELEASE = 2, /**< Release: 先前写不可后移 (ARM64: dmb ishst) */
@@ -124,8 +125,7 @@ int ub_dist_tx_res_fetch_xor(uint64_t *handle, uint64_t value, uint64_t *out_val
  * @return UB_RES_OK     操作成功（注意：success的值表示CAS是否匹配，而非函数调用是否成功）
  * @return UB_RES_ERROR  handle/expected/success为NULL，或地址未8字节对齐
  */
-int ub_dist_tx_res_compare_exchange(uint64_t *handle, uint64_t *expected,
-                                     uint64_t desired, int *success);
+int ub_dist_tx_res_compare_exchange(uint64_t *handle, uint64_t *expected, uint64_t desired, int *success);
 
 #ifndef UB_ATOMIC_LOG_FUNC_TYPEDEF
 #define UB_ATOMIC_LOG_FUNC_TYPEDEF

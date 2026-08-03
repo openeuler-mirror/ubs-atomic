@@ -29,23 +29,23 @@
  *   ./ub_dist_tx_res_if_test --shm shm_tx_res_if --case TC-ADD-IF
  */
 
+#include <getopt.h>
+#include <sys/mman.h>
+#include <cinttypes>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdint>
-#include <cinttypes>
 #include <ctime>
 #include <string>
-#include <getopt.h>
-#include <sys/mman.h>
 
+#include "ub_dist_tx_res.h"
 #include "ubs_mem.h"
 #include "ubs_mem_def.h"
-#include "ub_dist_tx_res.h"
 
 /* ===================== 常量 ===================== */
 
-#define SEPARATOR  "------------------------------------------------------------"
+#define SEPARATOR "------------------------------------------------------------"
 #define HEADER_SEP "============================================================"
 
 static const size_t SHM_SIZE_DEFAULT = 1UL * 1024 * 1024 * 1024; // 1GB
@@ -72,18 +72,28 @@ static int g_fail_cnt = 0;
 
 /* ===================== 日志 ===================== */
 
-static int my_stdout_logger(int level, const char *file, const char *func,
-                            uint32_t line, const char *message)
+static int my_stdout_logger(int level, const char *file, const char *func, uint32_t line, const char *message)
 {
     (void)func;
     const char *level_str = "UNKNOWN";
     switch (level) {
-        case LOG_LEVEL_DEBUG:    level_str = "DEBUG";    break;
-        case LOG_LEVEL_INFO:     level_str = "INFO";     break;
-        case LOG_LEVEL_WARN:     level_str = "WARN";     break;
-        case LOG_LEVEL_ERROR:    level_str = "ERROR";    break;
-        case LOG_LEVEL_CRITICAL: level_str = "CRITICAL"; break;
-        default: break;
+        case LOG_LEVEL_DEBUG:
+            level_str = "DEBUG";
+            break;
+        case LOG_LEVEL_INFO:
+            level_str = "INFO";
+            break;
+        case LOG_LEVEL_WARN:
+            level_str = "WARN";
+            break;
+        case LOG_LEVEL_ERROR:
+            level_str = "ERROR";
+            break;
+        case LOG_LEVEL_CRITICAL:
+            level_str = "CRITICAL";
+            break;
+        default:
+            break;
     }
     time_t now = time(nullptr);
     char *ts = ctime(&now);
@@ -94,30 +104,28 @@ static int my_stdout_logger(int level, const char *file, const char *func,
 
 /* ===================== 断言宏 ===================== */
 
-#define CHECK_RES(desc, actual, expect)                                       \
-    do {                                                                     \
-        int _a = (actual), _e = (expect);                                    \
-        if (_a == _e) {                                                      \
-            printf("  [PASS] %-50s (ret=%d)\n", (desc), _a);                 \
-            g_pass_cnt++;                                                    \
-        } else {                                                             \
-            printf("  [FAIL] %-50s (实际ret=%d, 期望ret=%d)\n",              \
-                   (desc), _a, _e);                                          \
-            g_fail_cnt++;                                                    \
-        }                                                                    \
+#define CHECK_RES(desc, actual, expect)                                          \
+    do {                                                                         \
+        int _a = (actual), _e = (expect);                                        \
+        if (_a == _e) {                                                          \
+            printf("  [PASS] %-50s (ret=%d)\n", (desc), _a);                     \
+            g_pass_cnt++;                                                        \
+        } else {                                                                 \
+            printf("  [FAIL] %-50s (实际ret=%d, 期望ret=%d)\n", (desc), _a, _e); \
+            g_fail_cnt++;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_VAL(desc, actual, expect)                                      \
-    do {                                                                     \
-        uint64_t _a = (actual), _e = (expect);                               \
-        if (_a == _e) {                                                      \
-            printf("  [PASS] %-50s (值=0x%" PRIx64 ")\n", (desc), _a);        \
-            g_pass_cnt++;                                                    \
-        } else {                                                             \
-            printf("  [FAIL] %-50s (实际=0x%" PRIx64 ", 期望=0x%" PRIx64 ")\n",\
-                   (desc), _a, _e);                                          \
-            g_fail_cnt++;                                                    \
-        }                                                                    \
+#define CHECK_VAL(desc, actual, expect)                                                          \
+    do {                                                                                         \
+        uint64_t _a = (actual), _e = (expect);                                                   \
+        if (_a == _e) {                                                                          \
+            printf("  [PASS] %-50s (值=0x%" PRIx64 ")\n", (desc), _a);                           \
+            g_pass_cnt++;                                                                        \
+        } else {                                                                                 \
+            printf("  [FAIL] %-50s (实际=0x%" PRIx64 ", 期望=0x%" PRIx64 ")\n", (desc), _a, _e); \
+            g_fail_cnt++;                                                                        \
+        }                                                                                        \
     } while (0)
 
 static void case_begin(const char *name)
@@ -135,8 +143,7 @@ static void case_end(const char *name)
     if (g_fail_cnt == 0)
         printf("[PASS] %s 全部通过 (%d/%d)\n", name, g_pass_cnt, g_pass_cnt + g_fail_cnt);
     else
-        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, g_fail_cnt,
-               g_pass_cnt, g_pass_cnt + g_fail_cnt);
+        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, g_fail_cnt, g_pass_cnt, g_pass_cnt + g_fail_cnt);
     printf(HEADER_SEP "\n\n");
 }
 
@@ -171,15 +178,12 @@ static int init_ubsmem_shm(const char *shm_name, size_t shm_size, void **base_ad
         fprintf(stderr, "[Error] ubsmem_lookup_regions failed: %d\n", ret);
         return -1;
     }
-    ret = ubsmem_shmem_map(nullptr, shm_size,
-                           PROT_READ | PROT_WRITE, MAP_SHARED,
-                           shm_name, 0, base_addr);
+    ret = ubsmem_shmem_map(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_name, 0, base_addr);
     if (ret != 0) {
         fprintf(stderr, "[Error] ubsmem_shmem_map(%s) failed: %d\n", shm_name, ret);
         return -1;
     }
-    printf("[Info] 共享内存映射成功: name=%s, addr=%p, size=%zu\n",
-           shm_name, *base_addr, shm_size);
+    printf("[Info] 共享内存映射成功: name=%s, addr=%p, size=%zu\n", shm_name, *base_addr, shm_size);
     return 0;
 }
 
@@ -564,9 +568,9 @@ struct CaseEntry {
 };
 
 static CaseEntry g_cases[] = {
-    {"TC-ADD-IF",   case_tc_add_if},
-    {"TC-XOR-IF",   case_tc_xor_if},
-    {"TC-CAS-IF",   case_tc_cas_if},
+    {"TC-ADD-IF", case_tc_add_if},
+    {"TC-XOR-IF", case_tc_xor_if},
+    {"TC-CAS-IF", case_tc_cas_if},
     {"TC-FENCE-IF", case_tc_fence_if},
 };
 
@@ -602,19 +606,18 @@ static void print_usage(const char *prog)
     for (const auto &c : g_cases) {
         fprintf(stderr, "  %s\n", c.id);
     }
-    fprintf(stderr, "\n示例:\n"
-                    "  %s --shm shm_tx_res_if\n"
-                    "  %s --shm shm_tx_res_if --case TC-ADD-IF\n",
+    fprintf(stderr,
+            "\n示例:\n"
+            "  %s --shm shm_tx_res_if\n"
+            "  %s --shm shm_tx_res_if --case TC-ADD-IF\n",
             prog, prog);
 }
 
-static struct option long_options[] = {
-    {"shm",      required_argument, nullptr, 's'},
-    {"shm-size", required_argument, nullptr, 'z'},
-    {"case",     required_argument, nullptr, 'c'},
-    {"help",     no_argument,       nullptr, 'h'},
-    {nullptr,    0,                 nullptr,  0 }
-};
+static struct option long_options[] = {{"shm", required_argument, nullptr, 's'},
+                                       {"shm-size", required_argument, nullptr, 'z'},
+                                       {"case", required_argument, nullptr, 'c'},
+                                       {"help", no_argument, nullptr, 'h'},
+                                       {nullptr, 0, nullptr, 0}};
 
 /* ===================== 主函数 ===================== */
 
@@ -627,11 +630,21 @@ int main(int argc, char *argv[])
     int opt;
     while ((opt = getopt_long(argc, argv, "s:z:c:h", long_options, nullptr)) != -1) {
         switch (opt) {
-            case 's': shm_name = optarg; break;
-            case 'z': shm_size_mb = std::stoull(optarg); break;
-            case 'c': case_id = optarg; break;
-            case 'h': print_usage(argv[0]); return 0;
-            default:  print_usage(argv[0]); return 1;
+            case 's':
+                shm_name = optarg;
+                break;
+            case 'z':
+                shm_size_mb = std::stoull(optarg);
+                break;
+            case 'c':
+                case_id = optarg;
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                return 0;
+            default:
+                print_usage(argv[0]);
+                return 1;
         }
     }
 
@@ -667,8 +680,7 @@ int main(int argc, char *argv[])
         printf("[Info] 基地址对齐调整: %p -> 0x%" PRIxPTR "\n", g_shm_base, base_addr);
     }
     g_layout = reinterpret_cast<IfTestLayout *>(base_addr);
-    printf("[Info] IfTestLayout 地址: %p, 大小: %zu\n",
-           (void *)g_layout, sizeof(IfTestLayout));
+    printf("[Info] IfTestLayout 地址: %p, 大小: %zu\n", (void *)g_layout, sizeof(IfTestLayout));
 
     int total_pass = 0, total_fail = 0;
     int saved_pass = 0, saved_fail = 0;
@@ -679,7 +691,8 @@ int main(int argc, char *argv[])
         total_fail = g_fail_cnt;
     } else {
         for (const auto &c : g_cases) {
-            saved_pass = g_pass_cnt; saved_fail = g_fail_cnt;
+            saved_pass = g_pass_cnt;
+            saved_fail = g_fail_cnt;
             c.fn();
             total_pass += (g_pass_cnt - saved_pass);
             total_fail += (g_fail_cnt - saved_fail);

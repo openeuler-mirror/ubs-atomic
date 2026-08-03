@@ -33,27 +33,27 @@
  *   ./ub_dist_tx_res_conc_2n_test --shm shm_conc_2n --role writer --case TC-ADD-2N
  */
 
+#include <getopt.h>
+#include <sys/mman.h>
+#include <atomic>
+#include <chrono>
+#include <cinttypes>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdint>
-#include <cinttypes>
 #include <ctime>
-#include <chrono>
+#include <string>
 #include <thread>
 #include <vector>
-#include <atomic>
-#include <string>
-#include <getopt.h>
-#include <sys/mman.h>
 
+#include "ub_dist_tx_res.h"
 #include "ubs_mem.h"
 #include "ubs_mem_def.h"
-#include "ub_dist_tx_res.h"
 
 /* ===================== 常量 ===================== */
 
-#define SEPARATOR  "------------------------------------------------------------"
+#define SEPARATOR "------------------------------------------------------------"
 #define HEADER_SEP "============================================================"
 
 static const size_t SHM_SIZE_DEFAULT = 1UL * 1024 * 1024 * 1024; // 1GB
@@ -65,12 +65,12 @@ static constexpr uint64_t OPS_PER_THREAD = 1ULL << 8; // 2^8
 
 /* 握手同步用控制字段 */
 struct ConcLayout {
-    uint64_t ready_flag;   // offset 0  : writer→reader: 开始并发
-    uint64_t writer_done;  // offset 8  : writer→reader: writer 并发完成，reader 可读最终值
-    uint64_t done_flag;    // offset 16 : reader→writer: reader 已读最终值并完成
-    uint64_t target;       // offset 24 : 各用例操作的共享变量
-    uint64_t cas_counter;  // offset 32 : TC-CAS-1N 用计数器（统计成功线程数）
-    uint64_t result_val;   // offset 40 : reader 读 target 后回传（兼容双端校验）
+    uint64_t ready_flag;  // offset 0  : writer→reader: 开始并发
+    uint64_t writer_done; // offset 8  : writer→reader: writer 并发完成，reader 可读最终值
+    uint64_t done_flag;   // offset 16 : reader→writer: reader 已读最终值并完成
+    uint64_t target;      // offset 24 : 各用例操作的共享变量
+    uint64_t cas_counter; // offset 32 : TC-CAS-1N 用计数器（统计成功线程数）
+    uint64_t result_val;  // offset 40 : reader 读 target 后回传（兼容双端校验）
 };
 
 /* ===================== 全局 ===================== */
@@ -85,18 +85,28 @@ static int g_fail_cnt = 0;
 
 /* ===================== 日志 ===================== */
 
-static int my_stdout_logger(int level, const char *file, const char *func,
-                            uint32_t line, const char *message)
+static int my_stdout_logger(int level, const char *file, const char *func, uint32_t line, const char *message)
 {
     (void)func;
     const char *level_str = "UNKNOWN";
     switch (level) {
-        case LOG_LEVEL_DEBUG:    level_str = "DEBUG";    break;
-        case LOG_LEVEL_INFO:     level_str = "INFO";     break;
-        case LOG_LEVEL_WARN:     level_str = "WARN";     break;
-        case LOG_LEVEL_ERROR:    level_str = "ERROR";    break;
-        case LOG_LEVEL_CRITICAL: level_str = "CRITICAL"; break;
-        default: break;
+        case LOG_LEVEL_DEBUG:
+            level_str = "DEBUG";
+            break;
+        case LOG_LEVEL_INFO:
+            level_str = "INFO";
+            break;
+        case LOG_LEVEL_WARN:
+            level_str = "WARN";
+            break;
+        case LOG_LEVEL_ERROR:
+            level_str = "ERROR";
+            break;
+        case LOG_LEVEL_CRITICAL:
+            level_str = "CRITICAL";
+            break;
+        default:
+            break;
     }
     time_t now = time(nullptr);
     char *ts = ctime(&now);
@@ -107,30 +117,28 @@ static int my_stdout_logger(int level, const char *file, const char *func,
 
 /* ===================== 断言宏 ===================== */
 
-#define CHECK_RES(desc, actual, expect)                                       \
-    do {                                                                     \
-        int _a = (actual), _e = (expect);                                    \
-        if (_a == _e) {                                                      \
-            printf("  [PASS] %-50s (ret=%d)\n", (desc), _a);                 \
-            g_pass_cnt++;                                                    \
-        } else {                                                             \
-            printf("  [FAIL] %-50s (实际ret=%d, 期望ret=%d)\n",              \
-                   (desc), _a, _e);                                          \
-            g_fail_cnt++;                                                    \
-        }                                                                    \
+#define CHECK_RES(desc, actual, expect)                                          \
+    do {                                                                         \
+        int _a = (actual), _e = (expect);                                        \
+        if (_a == _e) {                                                          \
+            printf("  [PASS] %-50s (ret=%d)\n", (desc), _a);                     \
+            g_pass_cnt++;                                                        \
+        } else {                                                                 \
+            printf("  [FAIL] %-50s (实际ret=%d, 期望ret=%d)\n", (desc), _a, _e); \
+            g_fail_cnt++;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_VAL(desc, actual, expect)                                      \
-    do {                                                                     \
-        uint64_t _a = (actual), _e = (expect);                               \
-        if (_a == _e) {                                                      \
-            printf("  [PASS] %-50s (值=%" PRIu64 ")\n", (desc), _a);         \
-            g_pass_cnt++;                                                    \
-        } else {                                                             \
-            printf("  [FAIL] %-50s (实际=%" PRIu64 ", 期望=%" PRIu64 ")\n",  \
-                   (desc), _a, _e);                                          \
-            g_fail_cnt++;                                                    \
-        }                                                                    \
+#define CHECK_VAL(desc, actual, expect)                                                      \
+    do {                                                                                     \
+        uint64_t _a = (actual), _e = (expect);                                               \
+        if (_a == _e) {                                                                      \
+            printf("  [PASS] %-50s (值=%" PRIu64 ")\n", (desc), _a);                         \
+            g_pass_cnt++;                                                                    \
+        } else {                                                                             \
+            printf("  [FAIL] %-50s (实际=%" PRIu64 ", 期望=%" PRIu64 ")\n", (desc), _a, _e); \
+            g_fail_cnt++;                                                                    \
+        }                                                                                    \
     } while (0)
 
 static void case_begin(const char *name)
@@ -148,8 +156,7 @@ static void case_end(const char *name)
     if (g_fail_cnt == 0)
         printf("[PASS] %s 全部通过 (%d/%d)\n", name, g_pass_cnt, g_pass_cnt + g_fail_cnt);
     else
-        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, g_fail_cnt,
-               g_pass_cnt, g_pass_cnt + g_fail_cnt);
+        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, g_fail_cnt, g_pass_cnt, g_pass_cnt + g_fail_cnt);
     printf(HEADER_SEP "\n\n");
 }
 
@@ -174,15 +181,12 @@ static int init_ubsmem_shm(const char *shm_name, size_t shm_size, void **base_ad
         fprintf(stderr, "[Error] ubsmem_lookup_regions failed: %d\n", ret);
         return -1;
     }
-    ret = ubsmem_shmem_map(nullptr, shm_size,
-                           PROT_READ | PROT_WRITE, MAP_SHARED,
-                           shm_name, 0, base_addr);
+    ret = ubsmem_shmem_map(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_name, 0, base_addr);
     if (ret != 0) {
         fprintf(stderr, "[Error] ubsmem_shmem_map(%s) failed: %d\n", shm_name, ret);
         return -1;
     }
-    printf("[Info] 共享内存映射成功: name=%s, addr=%p, size=%zu\n",
-           shm_name, *base_addr, shm_size);
+    printf("[Info] 共享内存映射成功: name=%s, addr=%p, size=%zu\n", shm_name, *base_addr, shm_size);
     return 0;
 }
 
@@ -276,10 +280,8 @@ static void case_tc_add_2n_writer(void)
     // 通知 reader 开始并发
     writer_signal_ready(5);
 
-    printf("  [writer] 启动 %d 线程, 每线程 ADD(1) × %llu + GET × %llu\n",
-           THREADS_PER_NODE,
-           (unsigned long long)OPS_PER_THREAD,
-           (unsigned long long)OPS_PER_THREAD);
+    printf("  [writer] 启动 %d 线程, 每线程 ADD(1) × %llu + GET × %llu\n", THREADS_PER_NODE,
+           (unsigned long long)OPS_PER_THREAD, (unsigned long long)OPS_PER_THREAD);
 
     auto t0 = std::chrono::steady_clock::now();
     std::vector<std::thread> workers;
@@ -294,7 +296,8 @@ static void case_tc_add_2n_writer(void)
             (void)out;
         });
     }
-    for (auto &t : workers) t.join();
+    for (auto &t : workers)
+        t.join();
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     printf("  [writer] 并发完成, 耗时 %.2f ms\n", ms);
@@ -313,10 +316,8 @@ static void case_tc_add_2n_reader(void)
     case_begin("TC-ADD-2N : add 两节点128线程并发 ADD/GET");
     reader_wait_ready(5);
 
-    printf("  [reader] 启动 %d 线程, 每线程 ADD(1) × %llu + GET × %llu\n",
-           THREADS_PER_NODE,
-           (unsigned long long)OPS_PER_THREAD,
-           (unsigned long long)OPS_PER_THREAD);
+    printf("  [reader] 启动 %d 线程, 每线程 ADD(1) × %llu + GET × %llu\n", THREADS_PER_NODE,
+           (unsigned long long)OPS_PER_THREAD, (unsigned long long)OPS_PER_THREAD);
 
     auto t0 = std::chrono::steady_clock::now();
     std::vector<std::thread> workers;
@@ -331,7 +332,8 @@ static void case_tc_add_2n_reader(void)
             (void)out;
         });
     }
-    for (auto &t : workers) t.join();
+    for (auto &t : workers)
+        t.join();
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     printf("  [reader] 并发完成, 耗时 %.2f ms\n", ms);
@@ -366,10 +368,8 @@ static void case_tc_xor_2n_writer(void)
 
     writer_signal_ready(6);
 
-    printf("  [writer] 启动 %d 线程, 每线程 XOR(2) × %llu + GET × %llu\n",
-           THREADS_PER_NODE,
-           (unsigned long long)OPS_PER_THREAD,
-           (unsigned long long)OPS_PER_THREAD);
+    printf("  [writer] 启动 %d 线程, 每线程 XOR(2) × %llu + GET × %llu\n", THREADS_PER_NODE,
+           (unsigned long long)OPS_PER_THREAD, (unsigned long long)OPS_PER_THREAD);
 
     auto t0 = std::chrono::steady_clock::now();
     std::vector<std::thread> workers;
@@ -384,7 +384,8 @@ static void case_tc_xor_2n_writer(void)
             (void)out;
         });
     }
-    for (auto &t : workers) t.join();
+    for (auto &t : workers)
+        t.join();
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     printf("  [writer] 并发完成, 耗时 %.2f ms\n", ms);
@@ -402,10 +403,8 @@ static void case_tc_xor_2n_reader(void)
     case_begin("TC-XOR-2N : xor 两节点128线程并发 XOR/GET");
     reader_wait_ready(6);
 
-    printf("  [reader] 启动 %d 线程, 每线程 XOR(9) × %llu + GET × %llu\n",
-           THREADS_PER_NODE,
-           (unsigned long long)OPS_PER_THREAD,
-           (unsigned long long)OPS_PER_THREAD);
+    printf("  [reader] 启动 %d 线程, 每线程 XOR(9) × %llu + GET × %llu\n", THREADS_PER_NODE,
+           (unsigned long long)OPS_PER_THREAD, (unsigned long long)OPS_PER_THREAD);
 
     auto t0 = std::chrono::steady_clock::now();
     std::vector<std::thread> workers;
@@ -420,7 +419,8 @@ static void case_tc_xor_2n_reader(void)
             (void)out;
         });
     }
-    for (auto &t : workers) t.join();
+    for (auto &t : workers)
+        t.join();
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     printf("  [reader] 并发完成, 耗时 %.2f ms\n", ms);
@@ -470,8 +470,7 @@ static void case_tc_cas_1n_reader(void)
     reader_wait_ready(7);
 
     // 128 线程各执行 1 次 CAS(expected=0, desired=2)
-    printf("  [reader] 启动 %d 线程, 每线程 1 次 CAS(exp=0, desired=2)\n",
-           THREADS_PER_NODE);
+    printf("  [reader] 启动 %d 线程, 每线程 1 次 CAS(exp=0, desired=2)\n", THREADS_PER_NODE);
 
     auto counter = std::atomic<int>(0);
     auto t0 = std::chrono::steady_clock::now();
@@ -481,14 +480,14 @@ static void case_tc_cas_1n_reader(void)
         workers.emplace_back([&counter]() {
             uint64_t expected = 0;
             int success = 0;
-            int ret = ub_dist_tx_res_compare_exchange(
-                &g_layout->target, &expected, 2, &success);
+            int ret = ub_dist_tx_res_compare_exchange(&g_layout->target, &expected, 2, &success);
             if (ret == UB_RES_OK && success == 1) {
                 counter.fetch_add(1, std::memory_order_relaxed);
             }
         });
     }
-    for (auto &t : workers) t.join();
+    for (auto &t : workers)
+        t.join();
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     int succ_cnt = counter.load();
@@ -524,10 +523,8 @@ static void case_tc_cas_2n_writer(void)
 
     writer_signal_ready(8);
 
-    printf("  [writer] 启动 %d 线程, 每线程 while-CAS 成功 %llu 次 + GET %llu 次\n",
-           THREADS_PER_NODE,
-           (unsigned long long)OPS_PER_THREAD,
-           (unsigned long long)OPS_PER_THREAD);
+    printf("  [writer] 启动 %d 线程, 每线程 while-CAS 成功 %llu 次 + GET %llu 次\n", THREADS_PER_NODE,
+           (unsigned long long)OPS_PER_THREAD, (unsigned long long)OPS_PER_THREAD);
 
     auto t0 = std::chrono::steady_clock::now();
     std::vector<std::thread> workers;
@@ -542,17 +539,18 @@ static void case_tc_cas_2n_writer(void)
                     ub_dist_tx_res_get(&g_layout->target, &expected);
                     uint64_t desired = expected + 1;
                     int success = 0;
-                    int r = ub_dist_tx_res_compare_exchange(
-                        &g_layout->target, &expected, desired, &success);
+                    int r = ub_dist_tx_res_compare_exchange(&g_layout->target, &expected, desired, &success);
                     (void)r;
-                    if (success == 1) break;
+                    if (success == 1)
+                        break;
                 }
                 ub_dist_tx_res_get(&g_layout->target, &out);
             }
             (void)out;
         });
     }
-    for (auto &t : workers) t.join();
+    for (auto &t : workers)
+        t.join();
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     printf("  [writer] 并发完成, 耗时 %.2f ms\n", ms);
@@ -570,10 +568,8 @@ static void case_tc_cas_2n_reader(void)
     case_begin("TC-CAS-2N : cas 两节点128线程并发 while-cas/GET");
     reader_wait_ready(8);
 
-    printf("  [reader] 启动 %d 线程, 每线程 while-CAS 成功 %llu 次 + GET %llu 次\n",
-           THREADS_PER_NODE,
-           (unsigned long long)OPS_PER_THREAD,
-           (unsigned long long)OPS_PER_THREAD);
+    printf("  [reader] 启动 %d 线程, 每线程 while-CAS 成功 %llu 次 + GET %llu 次\n", THREADS_PER_NODE,
+           (unsigned long long)OPS_PER_THREAD, (unsigned long long)OPS_PER_THREAD);
 
     auto t0 = std::chrono::steady_clock::now();
     std::vector<std::thread> workers;
@@ -588,17 +584,18 @@ static void case_tc_cas_2n_reader(void)
                     ub_dist_tx_res_get(&g_layout->target, &expected);
                     uint64_t desired = expected + 1;
                     int success = 0;
-                    int r = ub_dist_tx_res_compare_exchange(
-                        &g_layout->target, &expected, desired, &success);
+                    int r = ub_dist_tx_res_compare_exchange(&g_layout->target, &expected, desired, &success);
                     (void)r;
-                    if (success == 1) break;
+                    if (success == 1)
+                        break;
                 }
                 ub_dist_tx_res_get(&g_layout->target, &out);
             }
             (void)out;
         });
     }
-    for (auto &t : workers) t.join();
+    for (auto &t : workers)
+        t.join();
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     printf("  [reader] 并发完成, 耗时 %.2f ms\n", ms);
@@ -626,18 +623,20 @@ struct CaseEntry {
 };
 
 static CaseEntry g_cases[] = {
-    {"TC-ADD-2N",  case_tc_add_2n_writer,  case_tc_add_2n_reader},
-    {"TC-XOR-2N",  case_tc_xor_2n_writer,  case_tc_xor_2n_reader},
-    {"TC-CAS-1N",  case_tc_cas_1n_writer,  case_tc_cas_1n_reader},
-    {"TC-CAS-2N",  case_tc_cas_2n_writer,  case_tc_cas_2n_reader},
+    {"TC-ADD-2N", case_tc_add_2n_writer, case_tc_add_2n_reader},
+    {"TC-XOR-2N", case_tc_xor_2n_writer, case_tc_xor_2n_reader},
+    {"TC-CAS-1N", case_tc_cas_1n_writer, case_tc_cas_1n_reader},
+    {"TC-CAS-2N", case_tc_cas_2n_writer, case_tc_cas_2n_reader},
 };
 
 static void run_case(const std::string &id)
 {
     for (const auto &c : g_cases) {
         if (id == c.id) {
-            if (g_is_writer) c.writer_fn();
-            else            c.reader_fn();
+            if (g_is_writer)
+                c.writer_fn();
+            else
+                c.reader_fn();
             return;
         }
     }
@@ -647,8 +646,10 @@ static void run_case(const std::string &id)
 static void run_all(void)
 {
     for (const auto &c : g_cases) {
-        if (g_is_writer) c.writer_fn();
-        else            c.reader_fn();
+        if (g_is_writer)
+            c.writer_fn();
+        else
+            c.reader_fn();
     }
 }
 
@@ -667,24 +668,21 @@ static void print_usage(const char *prog)
     for (const auto &c : g_cases) {
         fprintf(stderr, "  %s\n", c.id);
     }
-    fprintf(stderr, "\n示例:\n"
-                    "  # Node0\n"
-                    "  %s --shm shm_conc_2n --role writer\n"
-                    "  # Node1\n"
-                    "  %s --shm shm_conc_2n --role reader\n"
-                    "  # 单用例\n"
-                    "  %s --shm shm_conc_2n --role writer --case TC-ADD-2N\n",
+    fprintf(stderr,
+            "\n示例:\n"
+            "  # Node0\n"
+            "  %s --shm shm_conc_2n --role writer\n"
+            "  # Node1\n"
+            "  %s --shm shm_conc_2n --role reader\n"
+            "  # 单用例\n"
+            "  %s --shm shm_conc_2n --role writer --case TC-ADD-2N\n",
             prog, prog, prog);
 }
 
 static struct option long_options[] = {
-    {"shm",      required_argument, nullptr, 's'},
-    {"role",     required_argument, nullptr, 'r'},
-    {"shm-size", required_argument, nullptr, 'z'},
-    {"case",     required_argument, nullptr, 'c'},
-    {"help",     no_argument,       nullptr, 'h'},
-    {nullptr,    0,                 nullptr,  0 }
-};
+    {"shm", required_argument, nullptr, 's'},      {"role", required_argument, nullptr, 'r'},
+    {"shm-size", required_argument, nullptr, 'z'}, {"case", required_argument, nullptr, 'c'},
+    {"help", no_argument, nullptr, 'h'},           {nullptr, 0, nullptr, 0}};
 
 /* ===================== 主函数 ===================== */
 
@@ -698,12 +696,24 @@ int main(int argc, char *argv[])
     int opt;
     while ((opt = getopt_long(argc, argv, "s:r:z:c:h", long_options, nullptr)) != -1) {
         switch (opt) {
-            case 's': shm_name = optarg; break;
-            case 'r': role_str = optarg; break;
-            case 'z': shm_size_mb = std::stoull(optarg); break;
-            case 'c': case_id = optarg; break;
-            case 'h': print_usage(argv[0]); return 0;
-            default:  print_usage(argv[0]); return 1;
+            case 's':
+                shm_name = optarg;
+                break;
+            case 'r':
+                role_str = optarg;
+                break;
+            case 'z':
+                shm_size_mb = std::stoull(optarg);
+                break;
+            case 'c':
+                case_id = optarg;
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                return 0;
+            default:
+                print_usage(argv[0]);
+                return 1;
         }
     }
 
@@ -717,8 +727,10 @@ int main(int argc, char *argv[])
         print_usage(argv[0]);
         return 1;
     }
-    if (role_str == "writer")      g_is_writer = true;
-    else if (role_str == "reader") g_is_writer = false;
+    if (role_str == "writer")
+        g_is_writer = true;
+    else if (role_str == "reader")
+        g_is_writer = false;
     else {
         fprintf(stderr, "[Error] --role 必须是 writer 或 reader, 当前: %s\n", role_str.c_str());
         return 1;
@@ -731,9 +743,7 @@ int main(int argc, char *argv[])
 
     printf(HEADER_SEP "\n");
     printf("  ub_dist_tx_res 并发测试（两节点）\n");
-    printf("  角色: %s (%s)\n",
-           g_is_writer ? "writer" : "reader",
-           g_is_writer ? "Node0/导出方" : "Node1/导入方");
+    printf("  角色: %s (%s)\n", g_is_writer ? "writer" : "reader", g_is_writer ? "Node0/导出方" : "Node1/导入方");
     printf("  共享内存: %s (%zu MB)\n", shm_name.c_str(), shm_size_mb);
     if (!case_id.empty())
         printf("  执行: 单用例 %s\n", case_id.c_str());
@@ -752,8 +762,7 @@ int main(int argc, char *argv[])
         printf("[Info] 基地址对齐调整: %p -> 0x%" PRIxPTR "\n", g_shm_base, base_addr);
     }
     g_layout = reinterpret_cast<ConcLayout *>(base_addr);
-    printf("[Info] ConcLayout 地址: %p, 大小: %zu\n",
-           (void *)g_layout, sizeof(ConcLayout));
+    printf("[Info] ConcLayout 地址: %p, 大小: %zu\n", (void *)g_layout, sizeof(ConcLayout));
 
     // writer 端初始化控制字段
     if (g_is_writer) {
@@ -776,9 +785,12 @@ int main(int argc, char *argv[])
         total_fail = g_fail_cnt;
     } else {
         for (const auto &c : g_cases) {
-            saved_pass = g_pass_cnt; saved_fail = g_fail_cnt;
-            if (g_is_writer) c.writer_fn();
-            else            c.reader_fn();
+            saved_pass = g_pass_cnt;
+            saved_fail = g_fail_cnt;
+            if (g_is_writer)
+                c.writer_fn();
+            else
+                c.reader_fn();
             total_pass += (g_pass_cnt - saved_pass);
             total_fail += (g_fail_cnt - saved_fail);
             // 用例间隔

@@ -44,9 +44,7 @@ public:
 
     bool compare_exchange(uint64_t *expected, uint64_t desired)
     {
-        return ptr->compare_exchange_strong(*expected, desired,
-                                             std::memory_order_acq_rel,
-                                             std::memory_order_acquire);
+        return ptr->compare_exchange_strong(*expected, desired, std::memory_order_acq_rel, std::memory_order_acquire);
     }
 };
 
@@ -111,40 +109,40 @@ int ub_dist_tx_res_fetch_add(uint64_t *handle, uint64_t value, uint64_t *out_val
 int ub_dist_tx_res_fence(ub_fence_order_t order)
 {
     switch (order) {
-    case UB_FENCE_RELAXED:
-        // 仅编译器屏障：阻止寄存器缓存和编译器重排，不生成硬件 fence
-        asm volatile("" ::: "memory");
-        break;
-    case UB_FENCE_ACQUIRE:
+        case UB_FENCE_RELAXED:
+            // 仅编译器屏障：阻止寄存器缓存和编译器重排，不生成硬件 fence
+            asm volatile("" ::: "memory");
+            break;
+        case UB_FENCE_ACQUIRE:
 #if defined(__aarch64__) || defined(__arm__)
-        asm volatile("dmb ishld" ::: "memory");
+            asm volatile("dmb ishld" ::: "memory");
 #else
-        std::atomic_thread_fence(std::memory_order_acquire);
+            std::atomic_thread_fence(std::memory_order_acquire);
 #endif
-        break;
-    case UB_FENCE_RELEASE:
+            break;
+        case UB_FENCE_RELEASE:
 #if defined(__aarch64__) || defined(__arm__)
-        asm volatile("dmb ishst" ::: "memory");
+            asm volatile("dmb ishst" ::: "memory");
 #else
-        std::atomic_thread_fence(std::memory_order_release);
+            std::atomic_thread_fence(std::memory_order_release);
 #endif
-        break;
-    case UB_FENCE_ACQ_REL:
+            break;
+        case UB_FENCE_ACQ_REL:
 #if defined(__aarch64__) || defined(__arm__)
-        asm volatile("dmb ish" ::: "memory");
+            asm volatile("dmb ish" ::: "memory");
 #else
-        std::atomic_thread_fence(std::memory_order_acq_rel);
+            std::atomic_thread_fence(std::memory_order_acq_rel);
 #endif
-        break;
-    case UB_FENCE_SEQ_CST:
+            break;
+        case UB_FENCE_SEQ_CST:
 #if defined(__aarch64__) || defined(__arm__)
-        asm volatile("dsb ish" ::: "memory");
+            asm volatile("dsb ish" ::: "memory");
 #else
-        std::atomic_thread_fence(std::memory_order_seq_cst);
+            std::atomic_thread_fence(std::memory_order_seq_cst);
 #endif
-        break;
-    default:
-        return UB_RES_ERROR;
+            break;
+        default:
+            return UB_RES_ERROR;
     }
     return UB_RES_OK;
 }
@@ -177,8 +175,7 @@ int ub_dist_tx_res_fetch_xor(uint64_t *handle, uint64_t value, uint64_t *out_val
     return UB_RES_OK;
 }
 
-int ub_dist_tx_res_compare_exchange(uint64_t *handle, uint64_t *expected,
-                                     uint64_t desired, int *success)
+int ub_dist_tx_res_compare_exchange(uint64_t *handle, uint64_t *expected, uint64_t desired, int *success)
 {
     if (!handle || !expected || !success) {
         return UB_RES_ERROR;

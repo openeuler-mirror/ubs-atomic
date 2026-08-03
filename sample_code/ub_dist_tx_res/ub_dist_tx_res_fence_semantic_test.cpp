@@ -31,27 +31,27 @@
  *   ./ub_dist_tx_res_fence_semantic_test --shm shm_fence_sem --case TC-FENCE-MSGPASS
  */
 
+#include <getopt.h>
+#include <sys/mman.h>
+#include <atomic>
+#include <chrono>
+#include <cinttypes>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdint>
-#include <cinttypes>
 #include <ctime>
 #include <string>
 #include <thread>
-#include <atomic>
-#include <chrono>
 #include <vector>
-#include <getopt.h>
-#include <sys/mman.h>
 
+#include "ub_dist_tx_res.h"
 #include "ubs_mem.h"
 #include "ubs_mem_def.h"
-#include "ub_dist_tx_res.h"
 
 /* ===================== 常量 ===================== */
 
-#define SEPARATOR  "------------------------------------------------------------"
+#define SEPARATOR "------------------------------------------------------------"
 #define HEADER_SEP "============================================================"
 
 static const size_t SHM_SIZE_DEFAULT = 1UL * 1024 * 1024 * 1024; // 1GB
@@ -74,17 +74,23 @@ static const char *SHM_NAME_DEFAULT = "shm_fence_sem";
  */
 struct FenceSemLayout {
     /* cache line 0: TC-FENCE-MSGPASS 的 data */
-    uint64_t data_msg;        char _pad0[56];
+    uint64_t data_msg;
+    char _pad0[56];
     /* cache line 1: TC-FENCE-MSGPASS 的 ready */
-    uint64_t ready_msg;       char _pad1[56];
+    uint64_t ready_msg;
+    char _pad1[56];
     /* cache line 2: TC-FENCE-STORELOAD 的 x */
-    uint64_t x_val;           char _pad2[56];
+    uint64_t x_val;
+    char _pad2[56];
     /* cache line 3: TC-FENCE-STORELOAD 的 y */
-    uint64_t y_val;           char _pad3[56];
+    uint64_t y_val;
+    char _pad3[56];
     /* cache line 4: TC-FENCE-STORELOAD 的 r1（线程1 读 Y 的结果） */
-    uint64_t r1_val;          char _pad4[56];
+    uint64_t r1_val;
+    char _pad4[56];
     /* cache line 5: TC-FENCE-STORELOAD 的 r2（线程2 读 X 的结果） */
-    uint64_t r2_val;          char _pad5[56];
+    uint64_t r2_val;
+    char _pad5[56];
 };
 static_assert(sizeof(FenceSemLayout) == 384, "layout must be 6 cache lines");
 
@@ -99,18 +105,28 @@ static int g_fail_cnt = 0;
 
 /* ===================== 日志 ===================== */
 
-static int my_stdout_logger(int level, const char *file, const char *func,
-                            uint32_t line, const char *message)
+static int my_stdout_logger(int level, const char *file, const char *func, uint32_t line, const char *message)
 {
     (void)func;
     const char *level_str = "UNKNOWN";
     switch (level) {
-        case LOG_LEVEL_DEBUG:    level_str = "DEBUG";    break;
-        case LOG_LEVEL_INFO:     level_str = "INFO";     break;
-        case LOG_LEVEL_WARN:     level_str = "WARN";     break;
-        case LOG_LEVEL_ERROR:    level_str = "ERROR";    break;
-        case LOG_LEVEL_CRITICAL: level_str = "CRITICAL"; break;
-        default: break;
+        case LOG_LEVEL_DEBUG:
+            level_str = "DEBUG";
+            break;
+        case LOG_LEVEL_INFO:
+            level_str = "INFO";
+            break;
+        case LOG_LEVEL_WARN:
+            level_str = "WARN";
+            break;
+        case LOG_LEVEL_ERROR:
+            level_str = "ERROR";
+            break;
+        case LOG_LEVEL_CRITICAL:
+            level_str = "CRITICAL";
+            break;
+        default:
+            break;
     }
     time_t now = time(nullptr);
     char *ts = ctime(&now);
@@ -121,41 +137,39 @@ static int my_stdout_logger(int level, const char *file, const char *func,
 
 /* ===================== 断言宏 ===================== */
 
-#define CHECK_RES(desc, actual, expect)                                       \
-    do {                                                                     \
-        int _a = (actual), _e = (expect);                                    \
-        if (_a == _e) {                                                      \
-            printf("  [PASS] %-50s (ret=%d)\n", (desc), _a);                 \
-            g_pass_cnt++;                                                    \
-        } else {                                                             \
-            printf("  [FAIL] %-50s (实际ret=%d, 期望ret=%d)\n",              \
-                   (desc), _a, _e);                                          \
-            g_fail_cnt++;                                                    \
-        }                                                                    \
+#define CHECK_RES(desc, actual, expect)                                          \
+    do {                                                                         \
+        int _a = (actual), _e = (expect);                                        \
+        if (_a == _e) {                                                          \
+            printf("  [PASS] %-50s (ret=%d)\n", (desc), _a);                     \
+            g_pass_cnt++;                                                        \
+        } else {                                                                 \
+            printf("  [FAIL] %-50s (实际ret=%d, 期望ret=%d)\n", (desc), _a, _e); \
+            g_fail_cnt++;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_VAL(desc, actual, expect)                                      \
-    do {                                                                     \
-        uint64_t _a = (actual), _e = (expect);                               \
-        if (_a == _e) {                                                      \
-            printf("  [PASS] %-50s (值=%" PRIu64 ")\n", (desc), _a);          \
-            g_pass_cnt++;                                                    \
-        } else {                                                             \
-            printf("  [FAIL] %-50s (实际=%" PRIu64 ", 期望=%" PRIu64 ")\n",  \
-                   (desc), _a, _e);                                          \
-            g_fail_cnt++;                                                    \
-        }                                                                    \
+#define CHECK_VAL(desc, actual, expect)                                                      \
+    do {                                                                                     \
+        uint64_t _a = (actual), _e = (expect);                                               \
+        if (_a == _e) {                                                                      \
+            printf("  [PASS] %-50s (值=%" PRIu64 ")\n", (desc), _a);                         \
+            g_pass_cnt++;                                                                    \
+        } else {                                                                             \
+            printf("  [FAIL] %-50s (实际=%" PRIu64 ", 期望=%" PRIu64 ")\n", (desc), _a, _e); \
+            g_fail_cnt++;                                                                    \
+        }                                                                                    \
     } while (0)
 
-#define CHECK_COND(desc, cond)                                              \
-    do {                                                                     \
-        if (cond) {                                                          \
-            printf("  [PASS] %-50s\n", (desc));                              \
-            g_pass_cnt++;                                                    \
-        } else {                                                             \
-            printf("  [FAIL] %-50s\n", (desc));                              \
-            g_fail_cnt++;                                                    \
-        }                                                                    \
+#define CHECK_COND(desc, cond)                  \
+    do {                                        \
+        if (cond) {                             \
+            printf("  [PASS] %-50s\n", (desc)); \
+            g_pass_cnt++;                       \
+        } else {                                \
+            printf("  [FAIL] %-50s\n", (desc)); \
+            g_fail_cnt++;                       \
+        }                                       \
     } while (0)
 
 static void case_begin(const char *name)
@@ -173,8 +187,7 @@ static void case_end(const char *name)
     if (g_fail_cnt == 0)
         printf("[PASS] %s 全部通过 (%d/%d)\n", name, g_pass_cnt, g_pass_cnt + g_fail_cnt);
     else
-        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, g_fail_cnt,
-               g_pass_cnt, g_pass_cnt + g_fail_cnt);
+        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, g_fail_cnt, g_pass_cnt, g_pass_cnt + g_fail_cnt);
     printf(HEADER_SEP "\n\n");
 }
 
@@ -212,15 +225,12 @@ static int init_ubsmem_shm(const char *shm_name, size_t shm_size, void **base_ad
         fprintf(stderr, "[Error] ubsmem_lookup_regions failed: %d\n", ret);
         return -1;
     }
-    ret = ubsmem_shmem_map(nullptr, shm_size,
-                           PROT_READ | PROT_WRITE, MAP_SHARED,
-                           shm_name, 0, base_addr);
+    ret = ubsmem_shmem_map(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_name, 0, base_addr);
     if (ret != 0) {
         fprintf(stderr, "[Error] ubsmem_shmem_map(%s) failed: %d\n", shm_name, ret);
         return -1;
     }
-    printf("[Info] 共享内存映射成功: name=%s, addr=%p, size=%zu\n",
-           shm_name, *base_addr, shm_size);
+    printf("[Info] 共享内存映射成功: name=%s, addr=%p, size=%zu\n", shm_name, *base_addr, shm_size);
     return 0;
 }
 
@@ -307,10 +317,8 @@ static void case_tc_fence_msgpass(void)
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
     uint64_t fails = fail_count.load(std::memory_order_acquire);
-    printf("  [Info] 完成 %llu 次迭代, 耗时 %.2f ms\n",
-           (unsigned long long)MSGPASS_ITERS, ms);
-    printf("  [Info] 检测到 StoreStore 重排次数: %llu\n",
-           (unsigned long long)fails);
+    printf("  [Info] 完成 %llu 次迭代, 耗时 %.2f ms\n", (unsigned long long)MSGPASS_ITERS, ms);
+    printf("  [Info] 检测到 StoreStore 重排次数: %llu\n", (unsigned long long)fails);
 
     /* E1: 屏障有效时，重排次数必须为 0 */
     CHECK_COND("E1 StoreStore 重排次数 == 0 (RELEASE 屏障有效)", fails == 0);
@@ -356,7 +364,8 @@ static void case_tc_fence_storeload(void)
     auto thread1 = [&]() {
         while (running.load(std::memory_order_acquire)) {
             while (start1.load(std::memory_order_acquire) == 0) {
-                if (!running.load(std::memory_order_acquire)) return;
+                if (!running.load(std::memory_order_acquire))
+                    return;
             }
             ub_dist_tx_res_set(&g_layout->x_val, 1);
             /* StoreLoad 屏障：防止 X=1 与 r1=Y 之间发生 Store-Load 重排 */
@@ -375,7 +384,8 @@ static void case_tc_fence_storeload(void)
     auto thread2 = [&]() {
         while (running.load(std::memory_order_acquire)) {
             while (start2.load(std::memory_order_acquire) == 0) {
-                if (!running.load(std::memory_order_acquire)) return;
+                if (!running.load(std::memory_order_acquire))
+                    return;
             }
             ub_dist_tx_res_set(&g_layout->y_val, 1);
             ub_dist_tx_res_fence(UB_FENCE_SEQ_CST);
@@ -405,10 +415,8 @@ static void case_tc_fence_storeload(void)
         start2.store(1, std::memory_order_release);
 
         /* 等两个线程都完成（start 变回 0） */
-        while (start1.load(std::memory_order_acquire) != 0) {
-        }
-        while (start2.load(std::memory_order_acquire) != 0) {
-        }
+        while (start1.load(std::memory_order_acquire) != 0) {}
+        while (start2.load(std::memory_order_acquire) != 0) {}
 
         /* 汇总本轮 r1/r2，判断是否 (0,0) */
         std::atomic_thread_fence(std::memory_order_acquire);
@@ -420,9 +428,7 @@ static void case_tc_fence_storeload(void)
         }
 
         if ((i + 1) % 100000 == 0) {
-            printf("  [Info] 进度: %llu / %llu\n",
-                   (unsigned long long)(i + 1),
-                   (unsigned long long)g_storeload_iters);
+            printf("  [Info] 进度: %llu / %llu\n", (unsigned long long)(i + 1), (unsigned long long)g_storeload_iters);
         }
     }
     running.store(false, std::memory_order_release);
@@ -435,10 +441,8 @@ static void case_tc_fence_storeload(void)
     double ms = std::chrono::duration<double, std::milli>(t1end - t0).count();
 
     uint64_t reorders = reorder_count.load(std::memory_order_acquire);
-    printf("  [Info] 完成 %llu 次迭代, 耗时 %.2f ms\n",
-           (unsigned long long)g_storeload_iters, ms);
-    printf("  [Info] 检测到 (r1,r2)=(0,0) 次数: %llu\n",
-           (unsigned long long)reorders);
+    printf("  [Info] 完成 %llu 次迭代, 耗时 %.2f ms\n", (unsigned long long)g_storeload_iters, ms);
+    printf("  [Info] 检测到 (r1,r2)=(0,0) 次数: %llu\n", (unsigned long long)reorders);
 
     /* E1: SEQ_CST 屏障有效时，不应出现 (r1,r2)=(0,0) */
     CHECK_COND("E1 StoreLoad 重排次数 == 0 (SEQ_CST 屏障有效)", reorders == 0);
@@ -454,7 +458,7 @@ struct CaseEntry {
 };
 
 static CaseEntry g_cases[] = {
-    {"TC-FENCE-MSGPASS",   case_tc_fence_msgpass},
+    {"TC-FENCE-MSGPASS", case_tc_fence_msgpass},
     {"TC-FENCE-STORELOAD", case_tc_fence_storeload},
 };
 
@@ -487,26 +491,22 @@ static void print_usage(const char *prog)
             "  --iters <n>        TC-FENCE-STORELOAD 迭代次数, 默认 %llu\n"
             "\n"
             "可用用例编号:\n",
-            prog, SHM_SIZE_DEFAULT / (1024 * 1024),
-            (unsigned long long)g_storeload_iters);
+            prog, SHM_SIZE_DEFAULT / (1024 * 1024), (unsigned long long)g_storeload_iters);
     for (const auto &c : g_cases) {
         fprintf(stderr, "  %s\n", c.id);
     }
-    fprintf(stderr, "\n示例:\n"
-                    "  %s --shm shm_fence_sem\n"
-                    "  %s --shm shm_fence_sem --case TC-FENCE-MSGPASS\n"
-                    "  %s --shm shm_fence_sem --case TC-FENCE-STORELOAD --iters 5000000\n",
+    fprintf(stderr,
+            "\n示例:\n"
+            "  %s --shm shm_fence_sem\n"
+            "  %s --shm shm_fence_sem --case TC-FENCE-MSGPASS\n"
+            "  %s --shm shm_fence_sem --case TC-FENCE-STORELOAD --iters 5000000\n",
             prog, prog, prog);
 }
 
 static struct option long_options[] = {
-    {"shm",      required_argument, nullptr, 's'},
-    {"shm-size", required_argument, nullptr, 'z'},
-    {"case",     required_argument, nullptr, 'c'},
-    {"iters",    required_argument, nullptr, 'n'},
-    {"help",     no_argument,       nullptr, 'h'},
-    {nullptr,    0,                 nullptr,  0 }
-};
+    {"shm", required_argument, nullptr, 's'},  {"shm-size", required_argument, nullptr, 'z'},
+    {"case", required_argument, nullptr, 'c'}, {"iters", required_argument, nullptr, 'n'},
+    {"help", no_argument, nullptr, 'h'},       {nullptr, 0, nullptr, 0}};
 
 /* ===================== 主函数 ===================== */
 
@@ -519,12 +519,24 @@ int main(int argc, char *argv[])
     int opt;
     while ((opt = getopt_long(argc, argv, "s:z:c:n:h", long_options, nullptr)) != -1) {
         switch (opt) {
-            case 's': shm_name = optarg; break;
-            case 'z': shm_size_mb = std::stoull(optarg); break;
-            case 'c': case_id = optarg; break;
-            case 'n': g_storeload_iters = std::stoull(optarg); break;
-            case 'h': print_usage(argv[0]); return 0;
-            default:  print_usage(argv[0]); return 1;
+            case 's':
+                shm_name = optarg;
+                break;
+            case 'z':
+                shm_size_mb = std::stoull(optarg);
+                break;
+            case 'c':
+                case_id = optarg;
+                break;
+            case 'n':
+                g_storeload_iters = std::stoull(optarg);
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                return 0;
+            default:
+                print_usage(argv[0]);
+                return 1;
         }
     }
 
@@ -551,8 +563,7 @@ int main(int argc, char *argv[])
         printf("[Info] 基地址对齐调整: %p -> 0x%" PRIxPTR "\n", g_shm_base, base_addr);
     }
     g_layout = reinterpret_cast<FenceSemLayout *>(base_addr);
-    printf("[Info] FenceSemLayout 地址: %p, 大小: %zu\n",
-           (void *)g_layout, sizeof(FenceSemLayout));
+    printf("[Info] FenceSemLayout 地址: %p, 大小: %zu\n", (void *)g_layout, sizeof(FenceSemLayout));
 
     /* 执行用例 */
     if (case_id.empty()) {

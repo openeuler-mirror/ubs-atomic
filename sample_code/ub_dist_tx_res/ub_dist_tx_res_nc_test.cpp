@@ -25,44 +25,44 @@
  *   ./ub_dist_tx_res_nc_test --role reader --config tx_res_nc.conf
  */
 
+#include <getopt.h>
+#include <sys/mman.h>
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <cinttypes>
+#include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdint>
-#include <cstdarg>
-#include <cinttypes>
-#include <chrono>
-#include <thread>
-#include <string>
 #include <fstream>
 #include <sstream>
-#include <algorithm>
-#include <cctype>
-#include <getopt.h>
-#include <sys/mman.h>
+#include <string>
+#include <thread>
 
+#include "ub_dist_tx_res.h"
 #include "ubs_mem.h"
 #include "ubs_mem_def.h"
-#include "ub_dist_tx_res.h"
 
 /* ===================== 共享内存布局 ===================== */
 
 #pragma pack(push, 1)
 struct NcTestLayout {
     // Control Area (64B, cache line aligned)
-    uint64_t ready_flag;     // offset 0
-    uint64_t done_flag;      // offset 8
-    uint64_t scenario_id;    // offset 16
-    uint8_t  padding[40];    // offset 24, 对齐到64B
+    uint64_t ready_flag;  // offset 0
+    uint64_t done_flag;   // offset 8
+    uint64_t scenario_id; // offset 16
+    uint8_t padding[40];  // offset 24, 对齐到64B
 
     // Data Area
-    uint64_t data;           // offset 64  - 场景1: 本端写远端读
-    uint64_t counter;        // offset 72  - 场景2: 本端add远端读
-    uint64_t x;              // offset 80  - 场景3: seq_cst全局序
-    uint64_t y;              // offset 88  - 场景3: seq_cst全局序
-    uint64_t payload[2];     // offset 96  - 场景4: acq_rel双向同步
-    uint64_t fetch_counter;  // offset 112 - 场景5: 并发fetch_add
-    uint64_t result;         // offset 120 - 结果回写
+    uint64_t data;          // offset 64  - 场景1: 本端写远端读
+    uint64_t counter;       // offset 72  - 场景2: 本端add远端读
+    uint64_t x;             // offset 80  - 场景3: seq_cst全局序
+    uint64_t y;             // offset 88  - 场景3: seq_cst全局序
+    uint64_t payload[2];    // offset 96  - 场景4: acq_rel双向同步
+    uint64_t fetch_counter; // offset 112 - 场景5: 并发fetch_add
+    uint64_t result;        // offset 120 - 结果回写
 };
 #pragma pack(pop)
 
@@ -70,7 +70,7 @@ static_assert(sizeof(NcTestLayout) <= 128, "Layout exceeds expected size");
 
 /* ===================== 常量定义 ===================== */
 
-#define SEPARATOR  "------------------------------------------------------------"
+#define SEPARATOR "------------------------------------------------------------"
 #define HEADER_SEP "============================================================"
 
 static const size_t SHM_SIZE_DEFAULT = 64UL * 1024 * 1024; // 64MB
@@ -85,17 +85,27 @@ static bool g_is_writer = true; // true=writer(CC), false=reader(NC)
 
 /* ===================== 日志注册 ===================== */
 
-static int my_stdout_logger(int level, const char *file, const char *func,
-                            uint32_t line, const char *message)
+static int my_stdout_logger(int level, const char *file, const char *func, uint32_t line, const char *message)
 {
     const char *level_str = "UNKNOWN";
     switch (level) {
-        case LOG_LEVEL_DEBUG:    level_str = "DEBUG";    break;
-        case LOG_LEVEL_INFO:     level_str = "INFO";     break;
-        case LOG_LEVEL_WARN:     level_str = "WARN";     break;
-        case LOG_LEVEL_ERROR:    level_str = "ERROR";    break;
-        case LOG_LEVEL_CRITICAL: level_str = "CRITICAL"; break;
-        default: break;
+        case LOG_LEVEL_DEBUG:
+            level_str = "DEBUG";
+            break;
+        case LOG_LEVEL_INFO:
+            level_str = "INFO";
+            break;
+        case LOG_LEVEL_WARN:
+            level_str = "WARN";
+            break;
+        case LOG_LEVEL_ERROR:
+            level_str = "ERROR";
+            break;
+        case LOG_LEVEL_CRITICAL:
+            level_str = "CRITICAL";
+            break;
+        default:
+            break;
     }
     time_t now = time(nullptr);
     char *ts = ctime(&now);
@@ -110,7 +120,9 @@ static int my_stdout_logger(int level, const char *file, const char *func,
 
 static std::string trim(const std::string &s)
 {
-    auto not_space = [](unsigned char c) { return !std::isspace(c); };
+    auto not_space = [](unsigned char c) {
+        return !std::isspace(c);
+    };
     auto begin = std::find_if(s.begin(), s.end(), not_space);
     auto end = std::find_if(s.rbegin(), s.rend(), not_space).base();
     if (begin >= end)
@@ -121,9 +133,9 @@ static std::string trim(const std::string &s)
 /* ===================== 配置文件解析 ===================== */
 
 struct NcConfig {
-    std::string self;           // NodeA 或 NodeB
-    std::string shm_name;       // 共享内存名称
-    size_t shm_size_mb = 64;    // 共享内存大小(MB)
+    std::string self;        // NodeA 或 NodeB
+    std::string shm_name;    // 共享内存名称
+    size_t shm_size_mb = 64; // 共享内存大小(MB)
 };
 
 static bool load_nc_config(const std::string &path, NcConfig &cfg, std::string &err)
@@ -202,16 +214,13 @@ static int init_ubsmem_shm(const char *shm_name, size_t shm_size, void **base_ad
     }
 
     // 4. 映射共享内存
-    ret = ubsmem_shmem_map(nullptr, shm_size,
-                           PROT_READ | PROT_WRITE, MAP_SHARED,
-                           shm_name, 0, base_addr);
+    ret = ubsmem_shmem_map(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_name, 0, base_addr);
     if (ret != 0) {
         fprintf(stderr, "[Error] ubsmem_shmem_map(%s) failed: %d\n", shm_name, ret);
         return -1;
     }
 
-    fprintf(stdout, "[Info] 共享内存映射成功: name=%s, addr=%p, size=%zu\n",
-            shm_name, *base_addr, shm_size);
+    fprintf(stdout, "[Info] 共享内存映射成功: name=%s, addr=%p, size=%zu\n", shm_name, *base_addr, shm_size);
     return 0;
 }
 
@@ -267,17 +276,16 @@ static void reset_control_flags(void)
 static int g_pass_cnt = 0;
 static int g_fail_cnt = 0;
 
-#define CHECK_EQ(desc, actual, expect)                                       \
-    do {                                                                     \
-        uint64_t _a = (actual), _e = (expect);                              \
-        if (_a == _e) {                                                      \
-            printf("  [PASS] %-40s  (值=0x%" PRIx64 ")\n", (desc), _a);     \
-            g_pass_cnt++;                                                    \
-        } else {                                                             \
-            printf("  [FAIL] %-40s  (实际=0x%" PRIx64 ", 期望=0x%" PRIx64 ")\n", \
-                   (desc), _a, _e);                                          \
-            g_fail_cnt++;                                                    \
-        }                                                                    \
+#define CHECK_EQ(desc, actual, expect)                                                            \
+    do {                                                                                          \
+        uint64_t _a = (actual), _e = (expect);                                                    \
+        if (_a == _e) {                                                                           \
+            printf("  [PASS] %-40s  (值=0x%" PRIx64 ")\n", (desc), _a);                           \
+            g_pass_cnt++;                                                                         \
+        } else {                                                                                  \
+            printf("  [FAIL] %-40s  (实际=0x%" PRIx64 ", 期望=0x%" PRIx64 ")\n", (desc), _a, _e); \
+            g_fail_cnt++;                                                                         \
+        }                                                                                         \
     } while (0)
 
 static void print_scenario_summary(const char *name)
@@ -286,8 +294,7 @@ static void print_scenario_summary(const char *name)
     if (g_fail_cnt == 0)
         printf("[PASS] %s 全部通过 (%d/%d)\n", name, g_pass_cnt, g_pass_cnt + g_fail_cnt);
     else
-        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, g_fail_cnt,
-               g_pass_cnt, g_pass_cnt + g_fail_cnt);
+        printf("[FAIL] %s 有 %d 项失败 (%d/%d 通过)\n", name, g_fail_cnt, g_pass_cnt, g_pass_cnt + g_fail_cnt);
     printf(HEADER_SEP "\n\n");
     g_pass_cnt = 0;
     g_fail_cnt = 0;
@@ -339,8 +346,7 @@ static void scenario2_writer(void)
         ub_dist_tx_res_add(&g_layout->counter, ADD_VAL);
         uint64_t cur = 0;
         ub_dist_tx_res_get(&g_layout->counter, &cur);
-        printf("  [writer] add(%" PRIu64 ") 第%d次, counter=%" PRIu64 "\n",
-               ADD_VAL, i + 1, cur);
+        printf("  [writer] add(%" PRIu64 ") 第%d次, counter=%" PRIu64 "\n", ADD_VAL, i + 1, cur);
     }
 
     writer_signal_ready(2);
@@ -551,8 +557,7 @@ static void scenario5_writer(void)
     ub_dist_tx_res_fence(UB_FENCE_ACQUIRE);
     uint64_t final_val = 0;
     ub_dist_tx_res_get(&g_layout->fetch_counter, &final_val);
-    printf("  [writer] 最终 fetch_counter = %" PRIu64 " (期望 %d)\n",
-           final_val, OPS * 2);
+    printf("  [writer] 最终 fetch_counter = %" PRIu64 " (期望 %d)\n", final_val, OPS * 2);
 }
 
 static void scenario5_reader(void)
@@ -586,8 +591,7 @@ static void scenario5_reader(void)
     ub_dist_tx_res_fence(UB_FENCE_ACQUIRE);
     uint64_t final_val = 0;
     ub_dist_tx_res_get(&g_layout->fetch_counter, &final_val);
-    printf("  [reader] 最终 fetch_counter = %" PRIu64 " (期望 %d)\n",
-           final_val, OPS * 2);
+    printf("  [reader] 最终 fetch_counter = %" PRIu64 " (期望 %d)\n", final_val, OPS * 2);
     CHECK_EQ("并发 fetch_add 最终值 == 20000", final_val, (uint64_t)(OPS * 2));
     print_scenario_summary("场景5: 并发fetch_add竞争");
 }
@@ -627,8 +631,7 @@ static void scenario6_writer(void)
         uint64_t reader_val = 0;
         ub_dist_tx_res_get(&g_layout->result, &reader_val);
         if (reader_val != magic) {
-            printf("  [writer] 轮次 %d FAIL: reader 读到 0x%" PRIx64 ", 期望 0x%" PRIx64 "\n",
-                   r, reader_val, magic);
+            printf("  [writer] 轮次 %d FAIL: reader 读到 0x%" PRIx64 ", 期望 0x%" PRIx64 "\n", r, reader_val, magic);
         }
     }
 
@@ -668,8 +671,7 @@ static void scenario6_reader(void)
 
         if (val != expected_magic) {
             fail_rounds++;
-            printf("  [reader] 轮次 %d FAIL: 读到 0x%" PRIx64 ", 期望 0x%" PRIx64 "\n",
-                   r, val, expected_magic);
+            printf("  [reader] 轮次 %d FAIL: 读到 0x%" PRIx64 ", 期望 0x%" PRIx64 "\n", r, val, expected_magic);
         }
 
         // 回写结果
@@ -701,12 +703,30 @@ static void run_scenario(int id)
     ScenarioFunc reader_fn = nullptr;
 
     switch (id) {
-        case 1: writer_fn = scenario1_writer; reader_fn = scenario1_reader; break;
-        case 2: writer_fn = scenario2_writer; reader_fn = scenario2_reader; break;
-        case 3: writer_fn = scenario3_writer; reader_fn = scenario3_reader; break;
-        case 4: writer_fn = scenario4_writer; reader_fn = scenario4_reader; break;
-        case 5: writer_fn = scenario5_writer; reader_fn = scenario5_reader; break;
-        case 6: writer_fn = scenario6_writer; reader_fn = scenario6_reader; break;
+        case 1:
+            writer_fn = scenario1_writer;
+            reader_fn = scenario1_reader;
+            break;
+        case 2:
+            writer_fn = scenario2_writer;
+            reader_fn = scenario2_reader;
+            break;
+        case 3:
+            writer_fn = scenario3_writer;
+            reader_fn = scenario3_reader;
+            break;
+        case 4:
+            writer_fn = scenario4_writer;
+            reader_fn = scenario4_reader;
+            break;
+        case 5:
+            writer_fn = scenario5_writer;
+            reader_fn = scenario5_reader;
+            break;
+        case 6:
+            writer_fn = scenario6_writer;
+            reader_fn = scenario6_reader;
+            break;
         default:
             printf("未知场景: %d\n", id);
             return;
@@ -735,9 +755,7 @@ static void print_menu(void)
     printf("\n" HEADER_SEP "\n");
     printf("  ub_dist_tx_res 跨节点 NC 环境验证\n");
     printf(HEADER_SEP "\n");
-    printf("  角色: %s (%s)\n",
-           g_is_writer ? "writer" : "reader",
-           g_is_writer ? "本端CC" : "远端NC");
+    printf("  角色: %s (%s)\n", g_is_writer ? "writer" : "reader", g_is_writer ? "本端CC" : "远端NC");
     printf(HEADER_SEP "\n");
     printf("  1. 本端写-远端读 (set + fence_release + fence_acquire)\n");
     printf("  2. 本端add-远端读 (add + fence_release + fence_acquire)\n");
@@ -769,12 +787,10 @@ static void print_usage(const char *prog)
             prog, prog, prog);
 }
 
-static struct option long_options[] = {
-    {"role",   required_argument, nullptr, 'r'},
-    {"config", required_argument, nullptr, 'c'},
-    {"help",   no_argument,       nullptr, 'h'},
-    {nullptr,  0,                 nullptr,  0 }
-};
+static struct option long_options[] = {{"role", required_argument, nullptr, 'r'},
+                                       {"config", required_argument, nullptr, 'c'},
+                                       {"help", no_argument, nullptr, 'h'},
+                                       {nullptr, 0, nullptr, 0}};
 
 /* ===================== 主函数 ===================== */
 
@@ -833,8 +849,7 @@ int main(int argc, char *argv[])
 
     printf(HEADER_SEP "\n");
     printf("  ub_dist_tx_res 跨节点 NC 环境验证\n");
-    printf("  角色: %s (%s)\n", g_is_writer ? "writer" : "reader",
-           g_is_writer ? "本端CC/export端" : "远端NC/import端");
+    printf("  角色: %s (%s)\n", g_is_writer ? "writer" : "reader", g_is_writer ? "本端CC/export端" : "远端NC/import端");
     printf("  节点: %s\n", cfg.self.c_str());
     printf("  共享内存: %s (%zu MB)\n", cfg.shm_name.c_str(), cfg.shm_size_mb);
     printf(HEADER_SEP "\n\n");
@@ -853,8 +868,7 @@ int main(int argc, char *argv[])
     }
 
     g_layout = reinterpret_cast<NcTestLayout *>(base_addr);
-    printf("[Info] NcTestLayout 地址: %p, 大小: %zu\n",
-           g_layout, sizeof(NcTestLayout));
+    printf("[Info] NcTestLayout 地址: %p, 大小: %zu\n", g_layout, sizeof(NcTestLayout));
 
     // 初始化 tx_res 对象
     ub_dist_tx_res_init(&g_layout->ready_flag);
@@ -884,7 +898,12 @@ int main(int argc, char *argv[])
         }
 
         switch (choice) {
-            case 1: case 2: case 3: case 4: case 5: case 6:
+            case 1:
+            case 2:
+            case 3:
+            case 4:
+            case 5:
+            case 6:
                 run_scenario(choice);
                 break;
             case 7:
