@@ -907,16 +907,6 @@ void spin_lock_example(void)
 - 幂等性：连续多次调用等价于单次对应屏障。
 - `UB_FENCE_RELAXED` 仅生成编译器屏障（`asm volatile("" ::: "memory")`），不产生任何硬件 fence 指令，适用于仅需阻止编译器优化而无需硬件保序的场景。
 
-**向后兼容宏**
-
-旧接口名通过宏映射到统一接口，已有代码无需修改：
-
-```c
-#define ub_dist_tx_res_fence(UB_FENCE_ACQUIRE)  ub_dist_tx_res_fence(UB_FENCE_ACQUIRE)
-#define ub_dist_tx_res_fence(UB_FENCE_RELEASE)  ub_dist_tx_res_fence(UB_FENCE_RELEASE)
-#define ub_dist_tx_res_fence(UB_FENCE_ACQ_REL)  ub_dist_tx_res_fence(UB_FENCE_ACQ_REL)
-#define ub_dist_tx_res_fence(UB_FENCE_SEQ_CST)  ub_dist_tx_res_fence(UB_FENCE_SEQ_CST)
-```
 
 ### 4.10 `ub_dist_tx_res_add`
 
@@ -938,7 +928,6 @@ void spin_lock_example(void)
 - 与 `ub_dist_tx_res_fetch_add` 的区别：本接口不返回旧值，硬件可优化为更轻量的指令（ARM64: `STADD` vs `LDADD`）；使用 `release` 语义（`fetch_add` 使用 `acq_rel`），因无需读回的 acquire 保证。
 - 加法为 `uint64_t` 模算术，溢出时回绕（wrap-around），不产生错误。
 - 若需要获取加法以前的旧值，请使用 `ub_dist_tx_res_fetch_add`。
-- 在 NC（远端非缓存）场景下，add 操作完成后如需保证远端可见性，应配合 `ub_dist_tx_res_fence(UB_FENCE_RELEASE)` 使用。
 
 ### 4.11 `ub_dist_tx_res_fetch_xor`
 
