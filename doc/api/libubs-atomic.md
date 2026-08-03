@@ -877,85 +877,46 @@ void spin_lock_example(void)
 | `value` | `uint64_t` | 原子增加值 | 任意 `uint64_t` 值，溢出按无符号整数规则回绕 |
 | `out_val` | `uint64_t *` | 输出加法前旧值 | 非空 |
 
-### 4.6 `ub_dist_tx_res_fence_acquire`
+### 4.6 `ub_fence_order_t` 枚举
+
+| 名称 | 值 | ARM64 指令 | 说明 |
+| --- | ---: | --- | --- |
+| `UB_FENCE_RELAXED` | 0 | （无硬件指令） | 仅编译器屏障，阻止寄存器缓存和编译器重排 |
+| `UB_FENCE_ACQUIRE` | 1 | `dmb ishld` | Acquire：后续读不可前移 |
+| `UB_FENCE_RELEASE` | 2 | `dmb ishst` | Release：先前写不可后移 |
+| `UB_FENCE_ACQ_REL` | 3 | `dmb ish` | Acquire-Release：双向屏障 |
+| `UB_FENCE_SEQ_CST` | 4 | `dsb ish` | Sequential Consistency：全局一致序 |
+
+### 4.7 `ub_dist_tx_res_fence`
 
 | 项目 | 内容 |
 | --- | --- |
-| 名称 | `ub_dist_tx_res_fence_acquire` |
-| 接口描述 | Acquire 内存屏障，确保屏障之后的所有读操作不会被重排到屏障之前。用于 MPI_Win_lock 进入时，保证能看到之前 release 写的所有数据。 |
+| 名称 | `ub_dist_tx_res_fence` |
+| 接口描述 | 统一内存屏障接口。根据 `order` 参数插入对应强度的编译器屏障和硬件屏障。所有变体均包含 compiler barrier（`"memory"` clobber），可阻止编译器寄存器缓存和跨点重排。 |
 | 接口类型 | 函数 |
-| 函数原型 | `int ub_dist_tx_res_fence_acquire(void);` |
-| 返回参数 | 成功返回 `UB_RES_OK`（当前实现始终成功，保留返回值为将来扩展）。 |
+| 函数原型 | `int ub_dist_tx_res_fence(ub_fence_order_t order);` |
+| 返回参数 | 成功返回 `UB_RES_OK`；`order` 超出合法范围返回 `UB_RES_ERROR`。 |
 
 | 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
 | --- | --- | --- | --- |
-| （无） | — | fence 是线程级操作，不绑定特定地址 | — |
+| `order` | `ub_fence_order_t` | 屏障语义 | `UB_FENCE_RELAXED` ~ `UB_FENCE_SEQ_CST` |
 
 **约束与注意事项**
 
-- 对应 `memory_order_acquire`。
 - 线程安全：是（fence 仅约束调用线程自身的内存访问序）。
-- 幂等性：连续多次调用等价于单次屏障。
+- 幂等性：连续多次调用等价于单次对应屏障。
+- `UB_FENCE_RELAXED` 仅生成编译器屏障（`asm volatile("" ::: "memory")`），不产生任何硬件 fence 指令，适用于仅需阻止编译器优化而无需硬件保序的场景。
 
-### 4.7 `ub_dist_tx_res_fence_release`
+**向后兼容宏**
 
-| 项目 | 内容 |
-| --- | --- |
-| 名称 | `ub_dist_tx_res_fence_release` |
-| 接口描述 | Release 内存屏障，确保屏障之前的所有写操作不会被重排到屏障之后。用于 MPI_Win_unlock 退出时，保证本窗口内所有写操作对外可见。 |
-| 接口类型 | 函数 |
-| 函数原型 | `int ub_dist_tx_res_fence_release(void);` |
-| 返回参数 | 成功返回 `UB_RES_OK`（当前实现始终成功，保留返回值为将来扩展）。 |
+旧接口名通过宏映射到统一接口，已有代码无需修改：
 
-| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
-| --- | --- | --- | --- |
-| （无） | — | fence 是线程级操作，不绑定特定地址 | — |
-
-**约束与注意事项**
-
-- 对应 `memory_order_release`。
-- 线程安全：是（fence 仅约束调用线程自身的内存访问序）。
-- 幂等性：连续多次调用等价于单次屏障。
-
-### 4.8 `ub_dist_tx_res_fence_acq_rel`
-
-| 项目 | 内容 |
-| --- | --- |
-| 名称 | `ub_dist_tx_res_fence_acq_rel` |
-| 接口描述 | Acquire-Release 双向内存屏障，同时具有 acquire 和 release 语义。用于 MPI_Win_fence 等同步点，需双向同步的场景。 |
-| 接口类型 | 函数 |
-| 函数原型 | `int ub_dist_tx_res_fence_acq_rel(void);` |
-| 返回参数 | 成功返回 `UB_RES_OK`（当前实现始终成功，保留返回值为将来扩展）。 |
-
-| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
-| --- | --- | --- | --- |
-| （无） | — | fence 是线程级操作，不绑定特定地址 | — |
-
-**约束与注意事项**
-
-- 对应 `memory_order_acq_rel`。
-- 线程安全：是（fence 仅约束调用线程自身的内存访问序）。
-- 幂等性：连续多次调用等价于单次屏障。
-
-### 4.9 `ub_dist_tx_res_fence_seq_cst`
-
-| 项目 | 内容 |
-| --- | --- |
-| 名称 | `ub_dist_tx_res_fence_seq_cst` |
-| 接口描述 | Sequential Consistency 全局序一致屏障，最强屏障，保证所有线程/进程观察到的操作序一致。用于需要全局一致视图的严格同步场景。 |
-| 接口类型 | 函数 |
-| 函数原型 | `int ub_dist_tx_res_fence_seq_cst(void);` |
-| 返回参数 | 成功返回 `UB_RES_OK`（当前实现始终成功，保留返回值为将来扩展）。 |
-
-| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
-| --- | --- | --- | --- |
-| （无） | — | fence 是线程级操作，不绑定特定地址 | — |
-
-**约束与注意事项**
-
-- 对应 `memory_order_seq_cst`。
-- 线程安全：是（fence 仅约束调用线程自身的内存访问序）。
-- 幂等性：连续多次调用等价于单次最强屏障。
+```c
+#define ub_dist_tx_res_fence(UB_FENCE_ACQUIRE)  ub_dist_tx_res_fence(UB_FENCE_ACQUIRE)
+#define ub_dist_tx_res_fence(UB_FENCE_RELEASE)  ub_dist_tx_res_fence(UB_FENCE_RELEASE)
+#define ub_dist_tx_res_fence(UB_FENCE_ACQ_REL)  ub_dist_tx_res_fence(UB_FENCE_ACQ_REL)
+#define ub_dist_tx_res_fence(UB_FENCE_SEQ_CST)  ub_dist_tx_res_fence(UB_FENCE_SEQ_CST)
+```
 
 ### 4.10 `ub_dist_tx_res_add`
 
@@ -977,9 +938,53 @@ void spin_lock_example(void)
 - 与 `ub_dist_tx_res_fetch_add` 的区别：本接口不返回旧值，硬件可优化为更轻量的指令（ARM64: `STADD` vs `LDADD`）；使用 `release` 语义（`fetch_add` 使用 `acq_rel`），因无需读回的 acquire 保证。
 - 加法为 `uint64_t` 模算术，溢出时回绕（wrap-around），不产生错误。
 - 若需要获取加法以前的旧值，请使用 `ub_dist_tx_res_fetch_add`。
-- 在 NC（远端非缓存）场景下，add 操作完成后如需保证远端可见性，应配合 `ub_dist_tx_res_fence_release()` 使用。
+- 在 NC（远端非缓存）场景下，add 操作完成后如需保证远端可见性，应配合 `ub_dist_tx_res_fence(UB_FENCE_RELEASE)` 使用。
 
-### 4.11 事务资源使用样例
+### 4.11 `ub_dist_tx_res_fetch_xor`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_dist_tx_res_fetch_xor` |
+| 接口描述 | 对分布式事务资源执行原子异或并返回旧值。将 value 与 handle 指向的共享内存位置原子地进行 XOR 操作，返回操作前的旧值。使用 `memory_order_acq_rel` 语义。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_dist_tx_res_fetch_xor(uint64_t *handle, uint64_t value, uint64_t *out_val);` |
+| 返回参数 | 成功返回 `UB_RES_OK` 并将旧值写入 `*out_val`；参数无效或地址未对齐返回 `UB_RES_ERROR`。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `handle` | `uint64_t *` | 指向目标共享内存位置的指针 | 非空，且 8 字节对齐 |
+| `value` | `uint64_t` | 要异或的 64 位无符号整数值 | 任意 `uint64_t` 值 |
+| `out_val` | `uint64_t *` | 输出异或前的旧值 | 非空 |
+
+**约束与注意事项**
+
+- 异或操作为按位 XOR，满足自反性：`a ^ b ^ b == a`，可用于无锁标志位翻转。
+- 使用 `acq_rel` 语义，同时具备 acquire 和 release 保证。
+
+### 4.12 `ub_dist_tx_res_compare_exchange`
+
+| 项目 | 内容 |
+| --- | --- |
+| 名称 | `ub_dist_tx_res_compare_exchange` |
+| 接口描述 | 对分布式事务资源执行原子比较并交换（CAS）。如果 handle 指向的值等于 `*expected`，则原子地将其替换为 desired，返回成功；否则将当前值写入 `*expected`，返回失败。使用 `memory_order_acq_rel`（成功）/ `memory_order_acquire`（失败）语义。 |
+| 接口类型 | 函数 |
+| 函数原型 | `int ub_dist_tx_res_compare_exchange(uint64_t *handle, uint64_t *expected, uint64_t desired, int *success);` |
+| 返回参数 | 函数调用成功返回 `UB_RES_OK`（注意：`success` 的值表示 CAS 是否匹配，而非函数调用是否成功）；参数无效或地址未对齐返回 `UB_RES_ERROR`。 |
+
+| 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
+| --- | --- | --- | --- |
+| `handle` | `uint64_t *` | 指向目标共享内存位置的指针 | 非空，且 8 字节对齐 |
+| `expected` | `uint64_t *` | 输入为期望值，失败时输出当前实际值 | 非空 |
+| `desired` | `uint64_t` | 期望匹配时要写入的新值 | 任意 `uint64_t` 值 |
+| `success` | `int *` | 输出 CAS 是否成功（1=成功，0=失败） | 非空 |
+
+**约束与注意事项**
+
+- CAS 失败时，`*expected` 会被更新为当前实际值，调用方可据此重试。
+- 使用 `compare_exchange_strong` 语义，不会发生伪失败（spurious failure）。
+- 典型用法：自旋锁、无锁队列、状态机转换等需要原子条件更新的场景。
+
+### 4.13 事务资源使用样例
 
 ```c
 #include "ub_dist_tx_res.h"
@@ -1000,6 +1005,24 @@ int tx_res_example(void)
         return -1;
     }
     /* old_value == 99, value == 100 */
+
+    /* fetch_xor: 0x64 ^ 0x0F = 0x6B, 旧值 0x64 */
+    if (ub_dist_tx_res_fetch_xor(&value, 0x0F, &old_value) != UB_RES_OK) {
+        return -1;
+    }
+
+    /* compare_exchange: 期望 0x6B 匹配，替换为 200 */
+    uint64_t expected = 0x6B;
+    int success = 0;
+    if (ub_dist_tx_res_compare_exchange(&value, &expected, 200, &success) != UB_RES_OK) {
+        return -1;
+    }
+    /* success == 1, value == 200 */
+
+    /* fence: release + acquire 配对保证可见性 */
+    ub_dist_tx_res_fence(UB_FENCE_RELEASE);
+    ub_dist_tx_res_fence(UB_FENCE_ACQUIRE);
+
     return ub_dist_tx_res_get(&value, &old_value);
 }
 ```

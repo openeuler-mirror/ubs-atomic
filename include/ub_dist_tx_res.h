@@ -64,6 +64,69 @@ int ub_dist_tx_res_get(uint64_t *handle, uint64_t *out_val);
  */
 int ub_dist_tx_res_fetch_add(uint64_t *handle, uint64_t value, uint64_t *out_val);
 
+/**
+ * @brief 内存屏障语义枚举，对应 C11/C++11 memory_order。
+ */
+typedef enum {
+    UB_FENCE_RELAXED = 0, /**< 仅编译器屏障，不生成硬件 fence 指令 */
+    UB_FENCE_ACQUIRE = 1, /**< Acquire: 后续读不可前移 (ARM64: dmb ishld) */
+    UB_FENCE_RELEASE = 2, /**< Release: 先前写不可后移 (ARM64: dmb ishst) */
+    UB_FENCE_ACQ_REL = 3, /**< Acquire-Release: 双向 (ARM64: dmb ish) */
+    UB_FENCE_SEQ_CST = 4, /**< Sequential Consistency: 全局一致序 (ARM64: dsb ish) */
+} ub_fence_order_t;
+
+/**
+ * @brief 统一内存屏障接口。
+ *        根据 order 参数插入对应强度的编译器屏障和硬件屏障。
+ *        所有变体均包含 compiler barrier（"memory" clobber），
+ *        可阻止编译器寄存器缓存和跨点重排。
+ * @param[in] order : 屏障语义，取值范围 UB_FENCE_RELAXED ~ UB_FENCE_SEQ_CST
+ * @return UB_RES_OK     操作成功
+ * @return UB_RES_ERROR  order 超出合法范围
+ * @note 线程安全：是（fence 仅约束调用线程自身的内存访问序）
+ * @note 幂等性：连续多次调用等价于单次对应屏障
+ */
+int ub_dist_tx_res_fence(ub_fence_order_t order);
+
+/**
+ * @brief 对分布式事务资源执行原子加法（无fetch版本）。
+ *        将value原子地加到handle指向的共享内存位置，不返回旧值。
+ *        使用memory_order_release语义。
+ * @param[in] handle : 指向目标共享内存位置的指针，必须8字节对齐
+ * @param[in] value  : 要累加的64位无符号整数值
+ * @return UB_RES_OK     操作成功
+ * @return UB_RES_ERROR  handle为NULL或地址未8字节对齐
+ * @note 与 ub_dist_tx_res_fetch_add 的区别：不返回旧值，可优化为更轻量指令
+ */
+int ub_dist_tx_res_add(uint64_t *handle, uint64_t value);
+
+/**
+ * @brief 对分布式事务资源执行原子异或并返回旧值。
+ *        将value与handle指向的共享内存位置原子地进行XOR操作，返回旧值。
+ *        使用memory_order_acq_rel语义。
+ * @param[in]  handle  : 指向目标共享内存位置的指针，必须8字节对齐
+ * @param[in]  value   : 要异或的64位无符号整数值
+ * @param[out] out_val : 指针，用于存储操作前的旧值
+ * @return UB_RES_OK     操作成功
+ * @return UB_RES_ERROR  handle或out_val为NULL，或地址未8字节对齐
+ */
+int ub_dist_tx_res_fetch_xor(uint64_t *handle, uint64_t value, uint64_t *out_val);
+
+/**
+ * @brief 对分布式事务资源执行原子比较并交换（CAS）。
+ *        如果handle指向的值等于*expected，则原子地将其替换为desired，返回成功；
+ *        否则将当前值写入*expected，返回失败。
+ *        使用memory_order_acq_rel（成功）/ acquire（失败）语义。
+ * @param[in]     handle   : 指向目标共享内存位置的指针，必须8字节对齐
+ * @param[in,out] expected : 指针，输入为期望值，失败时输出当前实际值
+ * @param[in]     desired  : 期望匹配时要写入的新值
+ * @param[out]    success  : 指针，输出CAS是否成功（1=成功，0=失败）
+ * @return UB_RES_OK     操作成功（注意：success的值表示CAS是否匹配，而非函数调用是否成功）
+ * @return UB_RES_ERROR  handle/expected/success为NULL，或地址未8字节对齐
+ */
+int ub_dist_tx_res_compare_exchange(uint64_t *handle, uint64_t *expected,
+                                     uint64_t desired, int *success);
+
 #ifndef UB_ATOMIC_LOG_FUNC_TYPEDEF
 #define UB_ATOMIC_LOG_FUNC_TYPEDEF
 /*
