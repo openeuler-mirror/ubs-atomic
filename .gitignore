@@ -1,4 +1,6 @@
 .vscode/
 .gitcode/
-
-
+test/build/
+test/.cache/
+.gitignore
+build/
