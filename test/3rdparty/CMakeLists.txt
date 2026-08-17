@@ -22,15 +22,44 @@ message(STATUS "TEST THIRD_PARTY_DIR=${THIRD_PARTY_DIR}")
 
 ######################################################################
 # Gtest
+# 使用 openEuler 社区开源件 src-openeuler/googletest（googletest 1.10.9004）
 ######################################################################
+SET(GTEST_VERSION "1.10.9004")
+SET(GTEST_TARBALL_NAME "ros-humble-gtest-vendor_${GTEST_VERSION}.orig.tar.gz")
+SET(GTEST_OPENEULER_REPO "https://gitcode.com/src-openeuler/googletest.git")
+SET(GTEST_OPENEULER_BRANCH "humble")
+SET(GTEST_OPENEULER_RAW_URL "https://gitcode.com/api/v5/repos/src-openeuler/googletest/raw/${GTEST_TARBALL_NAME}?ref=${GTEST_OPENEULER_BRANCH}")
+SET(GTEST_DOWNLOAD_DIR ${CMAKE_BINARY_DIR}/3rdparty/gtest-download)
+SET(GTEST_LOCAL_VENDOR_DIR ${THIRD_PARTY_DIR}/googletest)
+
+# 优先使用本地已放置的 googletest 源码；否则从 src-openeuler 开源仓库下载源码包
+IF(EXISTS ${GTEST_LOCAL_VENDOR_DIR}/CMakeLists.txt)
+  MESSAGE(STATUS "gtest: use local vendor source ${GTEST_LOCAL_VENDOR_DIR}")
+  SET(GTEST_SOURCE_DIR ${GTEST_LOCAL_VENDOR_DIR})
+  SET(GTEST_DOWNLOAD_COMMAND "")
+ELSE()
+  MESSAGE(STATUS "gtest: fetch openEuler open-source googletest ${GTEST_VERSION} from ${GTEST_OPENEULER_REPO}")
+  SET(GTEST_SOURCE_DIR ${GTEST_DOWNLOAD_DIR}/ros-humble-gtest-vendor-${GTEST_VERSION})
+  SET(GTEST_DOWNLOAD_COMMAND
+    ${CMAKE_COMMAND} -E make_directory ${GTEST_DOWNLOAD_DIR}
+    COMMAND curl -fsSL --retry 3 --connect-timeout 30 -o ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME} ${GTEST_OPENEULER_RAW_URL}
+    COMMAND ${CMAKE_COMMAND} -E chdir ${GTEST_DOWNLOAD_DIR} ${CMAKE_COMMAND} -E tar xzf ${GTEST_DOWNLOAD_DIR}/${GTEST_TARBALL_NAME}
+    # vendor 包顶层是 ROS 包装，真正可构建的 googletest CMakeLists 为 CMakeLists.txt.upstream
+    COMMAND ${CMAKE_COMMAND} -E copy ${GTEST_SOURCE_DIR}/CMakeLists.txt.upstream ${GTEST_SOURCE_DIR}/CMakeLists.txt)
+ENDIF()
+
 SET(GTEST_CMAKE_ARGS
   ${THIRD_PARTY_CMAKE_ARGS}
-  -DBUILD_SHARED_LIBS=OFF)
+  -DBUILD_SHARED_LIBS=OFF
+  # vendor 包去掉了 install 开关和版本定义，需要显式指定
+  -DINSTALL_GTEST=ON
+  -DGOOGLETEST_VERSION=1.10.0
+  -DCMAKE_INSTALL_INCLUDEDIR=<INSTALL_DIR>/include)
  
 EXTERNALPROJECT_ADD(gtest
-  SOURCE_DIR ${THIRD_PARTY_DIR}/googletest
+  SOURCE_DIR ${GTEST_SOURCE_DIR}
   CMAKE_ARGS ${GTEST_CMAKE_ARGS}
-  DOWNLOAD_COMMAND ""
+  DOWNLOAD_COMMAND ${GTEST_DOWNLOAD_COMMAND}
   LOG_DOWNLOAD On
   LOG_CONFIGURE On
   LOG_BUILD On

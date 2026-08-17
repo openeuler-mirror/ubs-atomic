@@ -276,7 +276,8 @@ TEST_F(MessageManageTest, MessageProcessThreadTest)
 TEST_F(MessageManageTest, MessageProcessGrantNotifiesCtx)
 {
     ub_location_t loc{1, 2};
-    local_wait_ctx_t ctx{};
+    // 不能用聚合初始化：std::mutex/std::condition_variable 在新版 libstdc++ 中构造为 protected
+    local_wait_ctx_t ctx;
     local_msg_body_t body = {.tid = 1, .addr = &ctx, .type = UB_GRANT, .mode = UB_LOCK_S};
     message_t *msg = lock_->create_message(loc, 1, body);
     ASSERT_NE(msg, nullptr);

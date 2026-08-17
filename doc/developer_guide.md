@@ -136,8 +136,10 @@ sudo apt-get install -y lcov dos2unix
 | 库 | 说明 | 获取方式 |
 |-----|------|---------|
 | libboundscheck.so | 边界检查库 | 系统安装 |
-| googletest | 单元测试框架 | git submodule |
+| googletest | 单元测试框架 | 构建时自动从 openEuler 开源件 src-openeuler/googletest 拉取（可放置本地源码到 test/3rdparty/googletest 优先使用） |
 | mockcpp | 模拟测试框架 | git submodule |
+
+> 完整三方件来源、许可证与静态/动态引用清单见 [doc/3rdparty_open_source_components.md](3rdparty_open_source_components.md)。
 
 ### 2.4 开发环境配置
 
