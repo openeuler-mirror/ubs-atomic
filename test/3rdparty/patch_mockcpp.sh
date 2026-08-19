@@ -22,6 +22,9 @@ if [ "${patch_present}" = false ]; then
         echo "mockcpp patch already applied in build copy"
     elif git apply --check mockcpp_support_arm64.patch; then
         git apply mockcpp_support_arm64.patch
+    elif patch -p1 --fuzz=3 --dry-run < mockcpp_support_arm64.patch >/dev/null 2>&1; then
+        echo "git apply failed, falling back to patch --fuzz=3"
+        patch -p1 --fuzz=3 < mockcpp_support_arm64.patch
     else
         echo "mockcpp patch cannot be applied to build copy" >&2
         exit 1
