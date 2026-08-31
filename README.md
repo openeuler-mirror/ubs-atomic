@@ -132,15 +132,29 @@ ubs-atomic/
 - `librt`
 - `libboundscheck.so`（代码和测试都显式依赖）
 
+> **非 openEuler 系统（如 Ubuntu）获取 libboundscheck**：
+> 1. 从 https://gitcode.com/openeuler/libboundscheck 克隆源码
+> 2. 编译安装：`cd libboundscheck && make && sudo make install`
+> 3. Ubuntu 默认不搜索 `/usr/lib64`，需创建符号链接：
+>    `sudo ln -sf /usr/lib64/libboundscheck.so /usr/lib/aarch64-linux-gnu/libboundscheck.so && sudo ldconfig`
+> 4. 或设置环境变量：`export LD_LIBRARY_PATH=/usr/lib64:$LD_LIBRARY_PATH`
+
 样例与真实共享内存部署额外依赖：
 
 - 灵衢共享内存 SDK：`ubs_mem.h`、`ubs_mem_def.h`
 - 对应库：`-lubsm_sdk`
 - 可用的 `ubsmem` 服务 / daemon
 
+> **ubsmem SDK 获取方式**：
+> - 安装 RPM 包：`ubs-mem`、`ubs-mem-shmem`（从灵衢组件包获取）
+> - 安装后头文件位于 `/usr/include/ubs_mem.h`、`/usr/include/ubs_mem_def.h`
+> - 库文件位于 `/usr/lib64/libubsm_sdk.so`
+> - 启动服务：`systemctl start ubsmem`
+> - 样例编译时需指定：`-I/usr/include -L/usr/lib64 -lubsm_sdk`
+
 测试与覆盖率相关依赖：
 
-- `googletest`、`mockcpp`（通过子模块获取）
+- `googletest`（手动克隆）、`mockcpp`（手动克隆）
 - `lcov`
 - `genhtml`
 - `dos2unix`
@@ -152,28 +166,31 @@ ubs-atomic/
 ```bash
 git clone <your-repo-url>
 cd ubs-atomic
-git submodule update --init --recursive
+# googletest 和 mockcpp 需手动克隆到 test/3rdparty/
+git clone https://gitcode.com/mirrors/googletest.git test/3rdparty/googletest
+git clone https://gitcode.com/mirrors_sinojelly/mockcpp.git test/3rdparty/mockcpp
+cd test/3rdparty/mockcpp && git checkout v2.7 && cd ../../..
 ```
 
 ### 2. 编译动态库
 
 ```bash
 dos2unix build.sh
-sh build.sh
+bash build.sh
 ```
 
 常用构建方式：
 
 ```bash
 # Debug 版本
-sh build.sh -D
+bash build.sh -D
 
 # 指定 Release / RelWithDebInfo / MinSizeRel
-sh build.sh -T Release
-sh build.sh -T RelWithDebInfo
+bash build.sh -T Release
+bash build.sh -T RelWithDebInfo
 
 # 指定并行度
-sh build.sh -j 16
+bash build.sh -j 16
 ```
 
 构建产物默认位于：
@@ -181,7 +198,7 @@ sh build.sh -j 16
 - `dist/release/lib/libubs-atomic.so`
 - `dist/debug/lib/libubs-atomic.so`
 
-RPM 打包产物通过 `sh build.sh package` 生成，文件名格式为 `ubs-atomic-{version}-{release}.{ARCH}.rpm`，默认从 `ubs-atomic-1.0.0-1.aarch64.rpm` 开始；下个 release 可使用 `sh build.sh package -V 1.0.0-2`。
+RPM 打包产物通过 `bash build.sh package` 生成，文件名格式为 `ubs-atomic-{version}-{release}.{ARCH}.rpm`，默认从 `ubs-atomic-1.0.0-1.aarch64.rpm` 开始；下个 release 可使用 `bash build.sh package -V 1.0.0-2`。
 
 
 ### 3. 在你的工程中链接
@@ -511,18 +528,23 @@ int main()
 
 这些样例依赖 `ubsmem` SDK，适合在实际共享内存环境中联调。
 
+> **获取 ubsmem**：安装 `ubs-mem` 和 `ubs-mem-shmem` RPM 包后，头文件 `ubs_mem.h` 位于 `/usr/include/`，库 `libubsm_sdk.so` 位于 `/usr/lib64/`。详见上文"依赖库"章节。
+
 ## 测试说明
 
 ### 1. 初始化子模块
 
 ```bash
-git submodule update --init --recursive
+# googletest 和 mockcpp 需手动克隆到 test/3rdparty/
+git clone https://gitcode.com/mirrors/googletest.git test/3rdparty/googletest
+git clone https://gitcode.com/mirrors_sinojelly/mockcpp.git test/3rdparty/mockcpp
+cd test/3rdparty/mockcpp && git checkout v2.7 && cd ../../..
 ```
 
 ### 2. 执行单元测试
 
 ```bash
-sh test/run_ut.sh
+bash test/run_ut.sh
 ```
 
 测试脚本会：
@@ -581,7 +603,7 @@ sh test/run_ut.sh
 
 ### `libboundscheck.so` 找不到
 
-现有 CMake 和测试脚本默认依赖该库，并且示例路径写死为 `/usr/lib64/libboundscheck.so`。如果你的环境路径不同，需要自行调整库安装位置、`LD_LIBRARY_PATH` 或 CMake 配置。
+现有 CMake（`src/CMakeLists.txt`）硬编码链接 `/usr/lib64/libboundscheck.so`。openEuler 系统通过 `dnf install libboundscheck` 安装即可。非 openEuler 系统需从源码构建，并在标准库目录创建符号链接，详见上文"依赖库"章节。
 
 ### `build.sh` 运行前报脚本格式问题
 
@@ -591,12 +613,12 @@ sh test/run_ut.sh
 dos2unix build.sh
 ```
 
-### `sh build.sh test` 失败
+### `bash build.sh test` 失败
 
 当前仓库里实际存在的是 `test/run_ut.sh`。如果你的分支仍然走到 `test/run_ut.sh`，请直接执行：
 
 ```bash
-sh test/run_ut.sh
+bash test/run_ut.sh
 ```
 
 ### 为什么样例代码依赖 `ubsmem`，而核心库没有直接链接它？
