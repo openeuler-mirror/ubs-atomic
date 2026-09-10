@@ -204,25 +204,25 @@ gcc your_app.c -lubs-atomic -o your_app
 
 1. 停止并删除容器
 
-```bash
-docker ps -a
-docker stop ubs-atomic-build
-docker rm ubs-atomic-build
-```
+   ```bash
+   docker ps -a
+   docker stop ubs-atomic-build
+   docker rm ubs-atomic-build
+   ```
 
 2. 删除镜像
 
-```bash
-docker rmi ubs-atomic-build:24.03-lts
-```
+   ```bash
+   docker rmi ubs-atomic-build:24.03-lts
+   ```
 
 3. 卸载 RPM 包
 
-```bash
-sudo dnf remove -y ubs-atomic
-# 或
-sudo rpm -e ubs-atomic
-```
+   ```bash
+   sudo dnf remove -y ubs-atomic
+   # 或
+   sudo rpm -e ubs-atomic
+   ```
 
 > [!NOTE]说明
 >
