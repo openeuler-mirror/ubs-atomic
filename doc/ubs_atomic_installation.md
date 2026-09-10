@@ -55,16 +55,23 @@
 
 ### 容器镜像部署（可选）
 
-容器环境部署有两种方式：
+容器环境部署方式：
 
 - 基于镜像构建容器环境
-- 基于 openEuler 基础环境从零安装
 
 #### 方式一：基于镜像构建容器环境
 
 基于镜像构建容器环境，首先需要获取镜像。通过 Dockerfile 预先将全部构建依赖安装进镜像，后续进入容器即可直接编译，无需重复安装工具链，节省环境准备时间。
 
 **步骤 1：获取镜像**
+
+选项一：直接拉取预构建镜像
+
+```bash
+docker pull swr.cn-north-4.myhuaweicloud.com/ubscore/ubs-atomic:24.03-lts
+```
+
+选项二：基于 Dockerfile 构建镜像
 
 Dockerfile 位于仓库 `docker/ubs-atomic.Dockerfile`，内容如下：
 
@@ -111,17 +118,6 @@ docker run -d --name ubs-atomic-build \
 ```bash
 docker exec -it ubs-atomic-build bash
 ```
-
-#### 方式二：基于 openEuler 基础环境从零安装
-
-不使用镜像时，可在 openEuler 24.03 LTS (aarch64) 环境手动安装全部构建依赖：
-
-```bash
-sudo dnf install -y make gcc gcc-c++ cmake ninja-build \
-    libboundscheck findutils git
-```
-
-该方式每次环境初始化均需联网安装依赖，耗时较长，推荐使用方式一。
 
 ## 构建项目与单元测试
 
