@@ -43,7 +43,7 @@
 | UBS_ATOMIC_VERSION | 1.0.0 | RPM 包版本号 |
 | UBS_ATOMIC_PACKAGE_RELEASE | 1 | RPM 包 release 号 |
 | BUILD_TESTS | OFF | 是否构建测试目录 |
-| ENABLE_COVERAGE | OFF | 是否生成覆盖率报告（依赖 lcov + genhtml） |
+| ENABLE_COVERAGE | OFF | 是否生成覆盖率报告（依赖 `lcov` + `genhtml`） |
 
 ### 平台相关编译选项
 
@@ -224,10 +224,10 @@ ip.NodeB=192.168.100.101
 
 | 配置项 | 说明 |
 | ---- | ---- |
-| self | 本节点身份标识。 |
-| nodes | 节点总数。 |
-| lock_shm | 存放读写锁对象的全局共享内存名。 |
-| shm.<NodeX> | 各节点通信队列导出共享内存名。 |
-| ip.<NodeX> | 各节点 IP，用于 query/rebuild 测试交换查询结果。 |
+| `self` | 本节点身份标识。 |
+| `nodes` | 节点总数。 |
+| `lock_shm` | 存放读写锁对象的全局共享内存名。 |
+| `shm.<NodeX>` | 各节点通信队列导出共享内存名。 |
+| `ip.<NodeX>` | 各节点 IP，用于 query/rebuild 测试交换查询结果。 |
 
 共享内存创建方法参见 `sample_code/share_mem/README.md`。
