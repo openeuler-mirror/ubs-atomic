@@ -98,9 +98,9 @@ docker build -f docker/ubs-atomic.Dockerfile -t ubs-atomic-build:24.03-lts .
 
 > [!NOTE]说明
 >
-> 构建依赖与仓库 <code>README.md</code> "环境与依赖"章节保持一致；googletest 由 CMake 自动从 src-openeuler 开源仓库下载，mockcpp 需按 <code>README.md</code> 说明手动放置到 <code>test/3rdparty/mockcpp/</code>，均无需在镜像内预装。
+> 构建依赖与仓库 <code>README.md</code> "环境与依赖"章节保持一致；googletest 由 CMake 自动从 src-openeuler 开源仓库下载，mock 测试桩框架需按 <code>README.md</code> 说明手动放置到 <code>test/3rdparty/</code> 对应目录，均无需在镜像内预装。
 > aarch64 主机直接构建即可；x86_64 主机可加 <code>--platform linux/arm64</code> 构建镜像（仅用于验证 Dockerfile，容器内交叉编译极慢，不推荐）。
-> 覆盖率报告依赖 lcov/genhtml（openEuler 官方仓库不含，需源码安装），如容器内需生成覆盖率，可在镜像内追加安装。
+> 覆盖率报告依赖 lcov 工具链（openEuler 官方仓库不含，需源码安装），如容器内需生成覆盖率，可在镜像内追加安装。
 
 **步骤 2：创建容器**
 
@@ -138,7 +138,7 @@ bash build.sh test         # 编译并运行 ubs_atomic_ut，生成覆盖率报�
 
 > [!NOTE]说明
 >
-> 首次运行单元测试前，需将 mockcpp 源码放置到 <code>test/3rdparty/mockcpp/</code>（详见仓内 <code>README.md</code>）；googletest 会由 CMake 自动从 src-openeuler 开源仓库下载。详细用法见仓内 <code>README.md</code> 与 <code>doc/developer_guide.md</code>。
+> 首次运行单元测试前，需按 <code>README.md</code> 将 mock 测试桩框架源码放置到 <code>test/3rdparty/</code> 对应目录；googletest 会由 CMake 自动从 src-openeuler 开源仓库下载。详细用法见仓内 <code>README.md</code> 与 <code>doc/developer_guide.md</code>。
 
 ## 运行示例与验证
 
