@@ -4,17 +4,19 @@
 
 * **ub_dist_lock_func_test：功能测试**
 
-  * 特点：CLI用户交互测试，模拟线程加解锁行为
+  特点：CLI用户交互测试，模拟线程加解锁行为
+
 * **ub_dist_lock_perf_test：性能测试**
 
-  * 特点：多线程并发持锁，统计时延。
+  特点：多线程并发持锁，统计时延。
 
-> 测试程序包含的功能：
-> 1. 初始化通信队列（跨节点消息通道）
-> 2. 映射共享内存锁对象并 `ub_rw_lock_create`
-> 3. 启动多线程读/写压测，统计 lock latency
-> 4. 支持交互命令 加解锁 / query / rebuild / 退出
-> 5. 结束时释放锁资源并卸载 shm
+**测试程序包含的功能**
+
+1. 初始化通信队列（跨节点消息通道）
+2. 映射共享内存锁对象并 `ub_rw_lock_create`
+3. 启动多线程读/写压测，统计 lock latency
+4. 支持交互命令 加解锁 / query / rebuild / 退出
+5. 结束时释放锁资源并卸载 shm
 
 ---
 
@@ -124,13 +126,13 @@ shm.NodeB=shm_node2_export
 ./ub_dist_lock_perf_test <master|slave> <shm_lock_name> <count> <Tpercent> <RWpercent> <delay> <setaffinity> [shm_total_size(MB)] [shm_queueA_name] [shm_queueB_name]
 ```
 
-参数解释见下文。
+参数说明请参见[参数说明](#6-参数说明)。
 
 ---
 
 ## 6. 参数说明
 
-功能测试参数：
+**功能测试参数**
 
 | 参数 | 含义 | 示例 |
 | --- | --- | --- |
@@ -138,7 +140,7 @@ shm.NodeB=shm_node2_export
 | `delay=0/1` | 是否允许延迟释放 | `delay=0` |
 | `recursive=0/1` | 是否允许递归加锁 | `recursive=0` |
 
-性能测试参数：
+**性能测试参数**
 
 | 参数 | 含义 | 示例 |
 | --- | --- | --- |
@@ -152,14 +154,18 @@ shm.NodeB=shm_node2_export
 | shm_total_size | 共享内存导出大小，默认不填写 1024MB | 1024MB 或 1073741824B |
 | shm_queueA_name | 通信队列节点1的 shm 名字 | shm_sender |
 | shm_queueB_name | 通信队列节点2的 shm 名字 | shm_receiver |
-> 线程数拆分规则：
 
-* master 线程数 = round(count * Tpercent)
-* slave 线程数 = round(count * (1 - Tpercent))
-  每个节点内部：
-* reader = round(node_threads * RWpercent)
-* writer = node_threads - reader
-* `[]`可以不用填写，内部会使用默认的
+> [!NOTE] 线程数拆分规则
+>
+> * master 线程数 = round(count * Tpercent)
+> * slave 线程数 = round(count * (1 - Tpercent))
+>
+>  每个节点内部：
+>
+> * reader = round(node_threads * RWpercent)
+> * writer = node_threads - reader
+> * `[]`可以不用填写，内部会使用默认的
+
 ---
 
 ## 7. 典型运行示例
@@ -177,12 +183,12 @@ shm.NodeB=shm_node2_export
 ```bash
 ./ub_dist_lock_perf_test slave ub_lock 512 0.8 0.7 0 -1 [1024MB] [shm_sender] [shm_receiver]
 ```
+
 启动后程序会提示输入 `c` 开始压测：
 
 ```text
 Type 'c' to continue...
 ```
-
 
 ---
 
@@ -265,20 +271,25 @@ ip.NodeB=10.10.10.2
 程序交互模式新增如下命令：
 
 - `query`
+  
   对当前锁执行本地查询，并把结果写到 `test.txt`
 
 - `recover <node_id>`
+  
   对当前锁调用 `ub_rw_lock_recover`，`node_id` 与配置中的节点顺序一致：`NodeA=0`，`NodeB=1`，`NodeC=2`，`NodeD=3`
 
 - `rebuild`
+  
   从 `test.txt` 读取**已经拼接好的结果**，构造 `rebuild_info`，然后执行 `rebuild`
 
 - `queryrebuild`
+  
   自动执行：
-   1. 本地 `query`
-   2. 将结果写到 `test.txt`
-   3. 两节点互发查询结果
-   4. 拼接结果并覆盖写回 `test.txt`
+  
+  1. 本地 `query`
+  2. 将结果写到 `test.txt`
+  3. 两节点互发查询结果
+  4. 拼接结果并覆盖写回 `test.txt`
   5. 调用 `rebuild`
   6. 将当前锁切换到新的槽位
 
@@ -352,35 +363,35 @@ s-
 
 1. 两节点先使用原始槽位启动：
 
-```bash
-./ub_dist_lock_func_test slot=origin
-```
+    ```bash
+    ./ub_dist_lock_func_test slot=origin
+    ```
 
 2. 执行一次：
 
-```text
-queryrebuild
-```
+    ```text
+    queryrebuild
+    ```
 
 3. 模拟：
 
-- 原始共享内存锁地址失效
-- 原进程退出
+   - 原始共享内存锁地址失效
+   - 原进程退出
 
 4. 两节点重新启动程序，但改为从重建槽位组启动：
 
-```bash
-./ub_dist_lock_func_test slot=rebuild
-```
+    ```bash
+    ./ub_dist_lock_func_test slot=rebuild
+    ```
 
 5. 重新执行：
 
-```text
-s+
-s-
-x+
-x-
-```
+    ```text
+    s+
+    s-
+    x+
+    x-
+    ```
 
 如果这些操作都能正常执行，说明：
 
