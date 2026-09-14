@@ -133,7 +133,7 @@ ubs-atomic/
 - `libboundscheck.so`（代码和测试都显式依赖）
 
 > **非 openEuler 系统（如 Ubuntu）获取 libboundscheck**：
-> 1. 从 https://gitcode.com/openeuler/libboundscheck 克隆源码
+> 1. 从 https://gitee.com/openeuler/libboundscheck 克隆源码
 > 2. 编译安装：`cd libboundscheck && make && sudo make install`
 > 3. Ubuntu 默认不搜索 `/usr/lib64`，需创建符号链接：
 >    `sudo ln -sf /usr/lib64/libboundscheck.so /usr/lib/aarch64-linux-gnu/libboundscheck.so && sudo ldconfig`
@@ -166,9 +166,10 @@ ubs-atomic/
 ```bash
 git clone <your-repo-url>
 cd ubs-atomic
-# googletest 和 mockcpp 需手动克隆到 test/3rdparty/
-git clone https://gitcode.com/mirrors/googletest.git test/3rdparty/googletest
-git clone https://gitcode.com/mirrors_sinojelly/mockcpp.git test/3rdparty/mockcpp
+# googletest 可由 CMake 自动从 src-openeuler 下载，也可手动克隆
+git clone https://gitee.com/mirrors/googletest.git test/3rdparty/googletest
+# mockcpp 需手动克隆到 test/3rdparty/（必须使用 v2.7 tag）
+git clone https://gitee.com/mirrors_sinojelly/mockcpp.git test/3rdparty/mockcpp
 cd test/3rdparty/mockcpp && git checkout v2.7 && cd ../../..
 ```
 
@@ -535,9 +536,10 @@ int main()
 ### 1. 初始化子模块
 
 ```bash
-# googletest 和 mockcpp 需手动克隆到 test/3rdparty/
-git clone https://gitcode.com/mirrors/googletest.git test/3rdparty/googletest
-git clone https://gitcode.com/mirrors_sinojelly/mockcpp.git test/3rdparty/mockcpp
+# googletest 可由 CMake 自动从 src-openeuler 下载，也可手动克隆
+git clone https://gitee.com/mirrors/googletest.git test/3rdparty/googletest
+# mockcpp 需手动克隆到 test/3rdparty/（必须使用 v2.7 tag）
+git clone https://gitee.com/mirrors_sinojelly/mockcpp.git test/3rdparty/mockcpp
 cd test/3rdparty/mockcpp && git checkout v2.7 && cd ../../..
 ```
 
