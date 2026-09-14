@@ -1,19 +1,5 @@
 # ubs-atomic 开发者指南
 
-## 目录
-
-1. [项目架构说明](#项目架构说明)
-2. [环境搭建步骤](#环境搭建步骤)
-3. [代码目录结构](#代码目录结构)
-4. [构建流程](#构建流程)
-5. [部署指南](#部署指南)
-6. [API 接口文档](#api-接口文档)
-7. [第三方系统接入说明](#第三方系统接入说明)
-8. [贡献代码规范](#贡献代码规范)
-9. [测试策略与方法](#测试策略与方法)
-10. [版本控制流程](#版本控制流程)
-11. [内部实现机制](#内部实现机制)
-
 ---
 
 ## 1. 项目架构说明
@@ -22,7 +8,7 @@
 
 ubs-atomic 采用分层架构设计，核心组件之间解耦且职责清晰：
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                        应用层                               │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────┐              │
@@ -54,7 +40,8 @@ ubs-atomic 采用分层架构设计，核心组件之间解耦且职责清晰：
 │                    基础设施层                               │
 │              共享内存 (ubsmem / POSIX shm)                   │
 └─────────────────────────────────────────────────────────────┘
-```
+
+```text
 
 ### 1.2 模块依赖关系
 
@@ -65,6 +52,7 @@ ubs-atomic 采用分层架构设计，核心组件之间解耦且职责清晰：
 | ub_dist_tx_res | 无 | 应用层 |
 
 **关键依赖关系说明：**
+
 - `ub_lock` 内部借助 `ub_comm_queue` 完成跨节点唤醒和释放通知
 - `ub_dist_tx_res` 不依赖任何其他模块，只要求调用方提供 8 字节对齐的共享内存地址
 
@@ -95,7 +83,8 @@ ubs-atomic 采用分层架构设计，核心组件之间解耦且职责清晰：
 
 ```cmake
 -march=armv8-a+lse
-```
+
+```text
 
 如需其他平台支持，请修改 CMakeLists.txt 中的编译选项。
 
@@ -109,7 +98,8 @@ sudo yum install -y git cmake gcc gcc-c++ make
 
 # Ubuntu/Debian
 sudo apt-get install -y git cmake gcc g++ make
-```
+
+```text
 
 #### 2.3.2 运行时依赖
 
@@ -119,7 +109,8 @@ sudo yum install -y glibc-devel libstdc++-devel
 
 # 或
 sudo apt-get install -y libc6-dev libstdc++6
-```
+
+```text
 
 #### 2.3.3 测试依赖
 
@@ -129,7 +120,8 @@ sudo yum install -y lcov genhtml dos2unix
 
 # 或
 sudo apt-get install -y lcov dos2unix
-```
+
+```text
 
 #### 2.3.4 三方库
 
@@ -137,7 +129,7 @@ sudo apt-get install -y lcov dos2unix
 |-----|------|---------|
 | libboundscheck.so | 边界检查库 | 系统安装 |
 | googletest | 单元测试框架 | 构建时自动从 openEuler 开源件 src-openeuler/googletest 拉取（可放置本地源码到 test/3rdparty/googletest 优先使用） |
-| mockcpp | 模拟测试框架 | git submodule |
+| mockcpp | 模拟测试框架 | 手动克隆（`gitee.com/mirrors_sinojelly/mockcpp.git`，v2.7 tag） |
 
 > 完整三方件来源、许可证与静态/动态引用清单见 [doc/3rdparty_open_source_components.md](3rdparty_open_source_components.md)。
 
@@ -152,7 +144,8 @@ cd ubs-atomic
 
 # 初始化子模块
 git submodule update --init --recursive
-```
+
+```text
 
 #### 2.4.2 环境变量配置
 
@@ -162,7 +155,8 @@ export CMAKE_PREFIX_PATH=/path/to/3rdparty:$CMAKE_PREFIX_PATH
 
 # 可选：设置 LD_LIBRARY_PATH
 export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
-```
+
+```text
 
 ---
 
@@ -170,7 +164,7 @@ export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 
 ### 3.1 整体结构
 
-```
+```text
 ubs-atomic/                              # 项目根目录
 ├── 3rdparty/                            # 三方依赖与子模块
 │   ├── googletest/                      # Google Test 框架
@@ -204,7 +198,8 @@ ubs-atomic/                              # 项目根目录
 ├── CMakeLists.txt                       # 根 CMake 配置
 ├── build.sh                             # 构建脚本
 └── README.md                            # 项目说明
-```
+
+```text
 
 ### 3.2 目录职责说明
 
@@ -230,19 +225,22 @@ ubs-atomic/                              # 项目根目录
 ```bash
 # 查看帮助
 sh build.sh -h
-```
+
+```text
 
 #### 4.1.1 编译动态库（默认 Release 版本）
 
 ```bash
 sh build.sh
-```
+
+```text
 
 #### 4.1.2 编译 Debug 版本
 
 ```bash
 sh build.sh -D
-```
+
+```text
 
 #### 4.1.3 指定构建类型
 
@@ -258,19 +256,22 @@ sh build.sh -T RelWithDebInfo
 
 # 最小体积版本
 sh build.sh -T MinSizeRel
-```
+
+```text
 
 #### 4.1.4 指定并行编译数
 
 ```bash
 sh build.sh -j 16
-```
+
+```text
 
 #### 4.1.5 清理构建
 
 ```bash
 sh build.sh clean
-```
+
+```text
 
 #### 4.1.6 生成 RPM 包
 
@@ -280,7 +281,8 @@ sh build.sh package
 
 # 生成指定版本
 sh build.sh package -V 1.0.0-2
-```
+
+```text
 
 ### 4.2 构建产物
 
@@ -308,7 +310,8 @@ make -j$(nproc)
 
 # 安装
 make install DESTDIR=/path/to/install
-```
+
+```text
 
 ### 4.4 链接示例
 
@@ -319,7 +322,8 @@ g++ -std=c++17 app.cpp \
   -lubs-atomic \
   -lpthread -lrt \
   -march=armv8-a+lse
-```
+
+```text
 
 ---
 
@@ -334,21 +338,24 @@ g++ -std=c++17 app.cpp \
 sudo yum install -y libboundscheck
 
 # 安装 UBSM SDK（如果需要运行样例）
-```
+
+```text
 
 #### 5.1.2 环境变量
 
 ```bash
 export LD_LIBRARY_PATH=/path/to/ubs-atomic/dist/release/lib:$LD_LIBRARY_PATH
 export LD_LIBRARY_PATH=/path/to/libboundscheck:$LD_LIBRARY_PATH
-```
+
+```text
 
 #### 5.1.3 验证
 
 ```bash
 # 运行示例代码
 ./sample_code/ub_dist_tx_res/tx_res_sample
-```
+
+```text
 
 ### 5.2 测试环境部署
 
@@ -373,9 +380,11 @@ export LD_LIBRARY_PATH=/path/to/libboundscheck:$LD_LIBRARY_PATH
 #### 5.3.1 部署步骤
 
 1. **安装 RPM 包**
+
    ```bash
    rpm -ivh ubs-atomic-1.0.0-1.aarch64.rpm
-   ```
+
+   ```text
 
 2. **配置 ubsmem 服务**
    - 配置共享内存段
@@ -388,9 +397,11 @@ export LD_LIBRARY_PATH=/path/to/libboundscheck:$LD_LIBRARY_PATH
    - 配置心跳检测
 
 4. **启动应用**
+
    ```bash
    systemctl start your-application
-   ```
+
+   ```text
 
 #### 5.3.2 生产环境配置建议
 
@@ -422,7 +433,8 @@ typedef struct {
     uint64_t tid;       // 线程 ID，需全局唯一
     uint32_t node_id;   // 节点 ID，范围 [0, 16)
 } ub_location_t;
-```
+
+```text
 
 ##### ub_lock_config_t
 
@@ -431,7 +443,8 @@ typedef struct {
     uint32_t lease_time;        // 租约时间（毫秒）
     uint32_t heartbeat_timeout; // 心跳超时（毫秒）
 } ub_lock_config_t;
-```
+
+```text
 
 ##### ub_lock_policy_t
 
@@ -441,7 +454,8 @@ typedef struct {
     bool allow_delay_release;        // 是否允许延迟释放
     bool recursive;                  // 是否允许递归加锁
 } ub_lock_policy_t;
-```
+
+```text
 
 #### 6.1.2 主要接口
 
@@ -498,7 +512,8 @@ typedef struct {
     size_t size;   // 区域大小
     void *ptr;     // 区域指针
 } ub_shm_area_t;
-```
+
+```text
 
 ##### ub_ring_desc_t
 
@@ -508,7 +523,8 @@ typedef struct {
     uint32_t max_msg_size;    // 单消息最大大小
     uint32_t priority;        // 优先级（从 1 开始）
 } ub_ring_desc_t;
-```
+
+```text
 
 ##### ub_comm_conf_t
 
@@ -520,7 +536,8 @@ typedef struct {
     uint32_t num_rings;          // Ring 数量
     const ub_ring_desc_t *ring_descs; // Ring 描述数组
 } ub_comm_conf_t;
-```
+
+```text
 
 ##### message_t
 
@@ -529,7 +546,8 @@ typedef struct {
     message_header_t header;  // 消息头
     void *body;               // 消息体（仅在回调期间有效）
 } message_t;
-```
+
+```text
 
 #### 6.4.2 主要接口
 
@@ -585,24 +603,27 @@ typedef struct {
 ```cpp
 #include "ubs_mem.h"
 #include "ubs_mem_def.h"
-```
+
+```text
 
 #### 7.1.3 链接依赖
 
 ```bash
 -lubsm_sdk -lpthread -lrt
-```
+
+```text
 
 #### 7.1.4 使用流程
 
-```
+```text
 1. 初始化 ubsmem 环境
 2. 创建/打开共享内存段
 3. 映射共享内存到进程地址空间
 4. 将映射地址传递给 ubs-atomic 接口
 5. 使用完成后释放映射
 6. 清理 ubsmem 资源
-```
+
+```text
 
 ### 7.2 libboundscheck 接入
 
@@ -617,14 +638,16 @@ ls -la /usr/lib64/libboundscheck.so
 # 如果不存在，复制到系统路径
 cp /path/to/libboundscheck.so /usr/lib64/
 ldconfig
-```
+
+```text
 
 #### 7.2.2 CMake 配置
 
 ```cmake
 find_library(BOUNDSCHECK_LIB boundscheck REQUIRED)
 target_link_libraries(ubs-atomic PRIVATE ${BOUNDSCHECK_LIB})
-```
+
+```text
 
 ### 7.3 自定义共享内存接入
 
@@ -647,7 +670,8 @@ void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 // 清理
 munmap(ptr, size);
 shm_unlink("/my_shm");
-```
+
+```text
 
 ---
 
@@ -696,15 +720,17 @@ shm_unlink("/my_shm");
 
 #### 8.2.2 Commit 信息规范
 
-```
+```text
 <类型>(<模块>): <简要描述>
 
 <详细描述（可选）>
 
 <相关 Issue/PR 编号（可选）>
-```
+
+```text
 
 类型说明：
+
 - `feat`: 新功能
 - `fix`: 修复 bug
 - `docs`: 文档更新
@@ -715,14 +741,16 @@ shm_unlink("/my_shm");
 - `chore`: 构建/工具相关
 
 示例：
-```
+
+```text
 feat(ub_lock): add recursive lock support
 
 - 添加递归加锁功能
 - 更新相关测试用例
 
 Closes #123
-```
+
+```text
 
 #### 8.2.3 提交频率
 
@@ -764,7 +792,8 @@ sh test/run_ut.sh
 
 # 4. 检查编译警告
 sh build.sh -Werror
-```
+
+```text
 
 ---
 
@@ -789,7 +818,8 @@ git submodule update --init --recursive
 
 # 安装测试工具
 sudo yum install -y lcov genhtml dos2unix
-```
+
+```text
 
 #### 9.2.2 Mock 配置
 
@@ -802,7 +832,8 @@ sudo yum install -y lcov genhtml dos2unix
 MOCKER(ub_comm_queue_send)
     .stubs()
     .will(returnValue(UB_COMM_OK));
-```
+
+```text
 
 ### 9.3 执行测试
 
@@ -810,17 +841,19 @@ MOCKER(ub_comm_queue_send)
 
 ```bash
 sh test/run_ut.sh
-```
+
+```text
 
 #### 9.3.2 测试脚本执行流程
 
-```
+```text
 1. 准备 mockcpp 补丁
 2. 使用 test/CMakeLists.txt 构建测试用例
 3. 执行测试
 4. 生成覆盖率数据
 5. 输出测试报告
-```
+
+```text
 
 #### 9.3.3 测试产物
 
@@ -851,7 +884,8 @@ TEST(ub_lock, x_lock_success) {
 TEST(ub_lock, x_lock_timeout_when_contended) {
     // ...
 }
-```
+
+```text
 
 #### 9.5.2 测试结构
 
@@ -869,11 +903,13 @@ TEST(模块, 场景) {
     // 4. 清理 (Teardown)
     // 清理测试资源（如有需要）
 }
-```
+
+```text
 
 #### 9.5.3 边界条件测试
 
 必须覆盖的边界条件：
+
 - 参数为 NULL
 - 超时时间为 0
 - 最大/最小配置值
@@ -905,9 +941,10 @@ TEST(模块, 场景) {
 
 采用语义化版本控制（Semantic Versioning）：
 
-```
+```text
 MAJOR.MINOR.PATCH-RELEASE
-```
+
+```text
 
 | 字段 | 说明 | 变更场景 |
 |-----|------|---------|
@@ -922,7 +959,7 @@ MAJOR.MINOR.PATCH-RELEASE
 
 #### 10.2.1 分支模型
 
-```
+```text
 ┌───────────────────────────────────────────────────────────────┐
 │                      main (主分支)                            │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐                    │
@@ -941,7 +978,8 @@ MAJOR.MINOR.PATCH-RELEASE
 │         feature/xxx      fix/xxx       hotfix/xxx            │
 │         (功能分支)       (修复分支)     (热修复分支)          │
 └───────────────────────────────────────────────────────────────┘
-```
+
+```text
 
 #### 10.2.2 分支管理规则
 
@@ -958,9 +996,11 @@ MAJOR.MINOR.PATCH-RELEASE
 #### 10.3.1 常规发布
 
 1. **创建发布分支**
+
    ```bash
    git checkout -b release/1.0 main
-   ```
+
+   ```text
 
 2. **更新版本号**
    - 更新 CMakeLists.txt 中的版本号
@@ -973,34 +1013,44 @@ MAJOR.MINOR.PATCH-RELEASE
    - 进行回归测试
 
 4. **打标签**
+
    ```bash
    git tag -a v1.0.0 -m "Release v1.0.0"
    git push origin v1.0.0
-   ```
+
+   ```text
 
 5. **构建发布包**
+
    ```bash
    sh build.sh package -V 1.0.0-1
-   ```
+
+   ```text
 
 6. **合并回主分支**
+
    ```bash
    git checkout main
    git merge release/1.0 --no-ff
-   ```
+
+   ```text
 
 7. **清理发布分支**
+
    ```bash
    git branch -d release/1.0
    git push origin --delete release/1.0
-   ```
+
+   ```text
 
 #### 10.3.2 热修复发布
 
 1. **从标签创建热修复分支**
+
    ```bash
    git checkout -b hotfix/1.0.1 v1.0.0
-   ```
+
+   ```text
 
 2. **修复问题**
    - 最小化代码变更
@@ -1009,23 +1059,29 @@ MAJOR.MINOR.PATCH-RELEASE
 3. **测试验证**
 
 4. **更新版本号并打标签**
+
    ```bash
    git tag -a v1.0.1 -m "Hotfix v1.0.1"
-   ```
+
+   ```text
 
 5. **合并到主分支和活跃的 release 分支**
+
    ```bash
    git checkout main
    git merge hotfix/1.0.1
    
    git checkout release/1.1
    git merge hotfix/1.0.1
-   ```
+
+   ```text
 
 6. **清理**
+
    ```bash
    git branch -d hotfix/1.0.1
-   ```
+
+   ```text
 
 ### 10.4 版本归档
 
@@ -1042,17 +1098,18 @@ MAJOR.MINOR.PATCH-RELEASE
 
 #### 11.1.1 锁状态机
 
-```
+```text
 Free → Locking → Locked → Unlocking → Free
          ↓          ↓
         Timeout    Lease Expired
          ↓          ↓
         Free      Recovering → Free
-```
+
+```text
 
 #### 11.1.2 租约机制
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                     Lease 机制                              │
 ├─────────────────────────────────────────────────────────────┤
@@ -1061,11 +1118,13 @@ Free → Locking → Locked → Unlocking → Free
 │  3. 租约到期后，其他节点可抢占                               │
 │  4. 支持故障恢复：按进程 ID 强制释放异常持锁                   │
 └─────────────────────────────────────────────────────────────┘
-```
+
+```text
 
 #### 11.1.3 跨节点通知
 
 分布式锁内部借助通信队列完成：
+
 - 锁释放时通知等待者
 - 租约到期时通知持有者
 - 故障恢复时通知相关节点
@@ -1074,7 +1133,7 @@ Free → Locking → Locked → Unlocking → Free
 
 #### 11.2.1 Ring Buffer 设计
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                     Ring Buffer                             │
 ├─────────────────────────────────────────────────────────────┤
@@ -1086,17 +1145,19 @@ Free → Locking → Locked → Unlocking → Free
 │  - 单生产者/单消费者模型                                     │
 │  - 无锁设计，使用原子操作                                    │
 └─────────────────────────────────────────────────────────────┘
-```
+
+```text
 
 #### 11.2.2 流控机制
 
-```
+```text
 拥塞判定流程：
 1. 写入消息前检查 Ring 使用量
 2. 如果使用量 > 阈值（默认 80%），标记拥塞
 3. 返回 UB_COMM_SEND_CONGESTED
 4. 调用方可据此降低发送速率
-```
+
+```text
 
 #### 11.2.3 回调模型
 
@@ -1122,6 +1183,7 @@ Free → Locking → Locked → Unlocking → Free
 #### 11.3.3 延迟释放
 
 通过 `allow_delay_release` 选项：
+
 - 减少频繁的跨节点通知
 - 提高吞吐量
 - 适用于读多写少场景
