@@ -19,7 +19,7 @@
 
 - **引入位置**：`test/3rdparty/CMakeLists.txt` 中 `EXTERNALPROJECT_ADD(gtest ...)`
 - **获取方式**：构建 UT 时自动从 openEuler 社区开源仓库
-  `https://gitcode.com/src-openeuler/googletest`（humble 分支）下载
+  <https://gitcode.com/src-openeuler/googletest>（humble 分支）下载
   `ros-humble-gtest-vendor_1.10.9004.orig.tar.gz` 源码包并解压构建；
   也可将 googletest 源码手动放置于 `test/3rdparty/googletest/` 优先使用本地源码
 - **构建开关**：`-DBUILD_SHARED_LIBS=OFF -DINSTALL_GTEST=ON -DGOOGLETEST_VERSION=1.10.0`
@@ -57,7 +57,7 @@
 
 `libubs-atomic.so`（RPM 发布件）链接关系：
 
-```
+```text
 libubs-atomic.so
 ├── libboundscheck.so   (openEuler 开源件，动态)
 ├── libpthread / librt  (glibc，动态)

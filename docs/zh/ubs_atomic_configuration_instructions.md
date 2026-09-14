@@ -52,7 +52,7 @@
 
 ### 安全编译选项
 
-Release 与 Debug 构建均默认启用安全编译选项（详见[安全说明](security_instructions.md)）。
+Release 与 Debug 构建均默认启用安全编译选项（详见[安全说明](ubs_atomic_security_instructions.md)）。
 
 ## 资源规格配置
 

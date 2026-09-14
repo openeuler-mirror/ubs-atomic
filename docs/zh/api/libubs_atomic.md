@@ -373,7 +373,6 @@ int ret = ub_comm_queue_config_heartbeat(&handle, &req, &eff);
 
 - 当前不建议业务依赖该接口完成收包；请优先使用 `ub_comm_queue_register_process_func` 注册回调。
 
-
 **约束与注意事项**
 
 - 当前不建议业务依赖该接口完成收包；请优先使用 `ub_comm_queue_register_process_func` 注册回调。
@@ -456,6 +455,7 @@ int comm_example(void)
 ### 3.1 模块说明
 
 分布式锁模块提供三种锁类型：
+
 - **分布式读写锁**：支持共享锁 `S`、共享排他锁 `SX`、排他锁 `X`，并提供故障恢复、持有者查询和重建能力。
 - **分布式互斥锁**：轻量级互斥锁，适合简单的排他访问场景。
 - **分布式自旋锁**：基于 CAS 的自旋锁，适合极短临界区场景。
@@ -906,7 +906,6 @@ void spin_lock_example(void)
 - 线程安全：是（fence 仅约束调用线程自身的内存访问序）。
 - 幂等性：连续多次调用等价于单次对应屏障。
 - `UB_FENCE_RELAXED` 仅生成编译器屏障（`asm volatile("" ::: "memory")`），不产生任何硬件 fence 指令，适用于仅需阻止编译器优化而无需硬件保序的场景。
-
 
 ### 4.10 `ub_dist_tx_res_add`
 
