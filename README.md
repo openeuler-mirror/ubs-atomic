@@ -186,7 +186,7 @@ bash build.sh
 bash build.sh -D
 
 # 指定 Release / RelWithDebInfo / MinSizeRel
-bash build.sh -T Release
+bash build.sh -T Release 
 bash build.sh -T RelWithDebInfo
 
 # 指定并行度
