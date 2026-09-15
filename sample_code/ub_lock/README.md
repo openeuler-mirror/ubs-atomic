@@ -160,7 +160,7 @@ shm.NodeB=shm_node2_export
 > * master 线程数 = round(count * Tpercent)
 > * slave 线程数 = round(count * (1 - Tpercent))
 >
->  每个节点内部：
+> 每个节点内部：
 >
 > * reader = round(node_threads * RWpercent)
 > * writer = node_threads - reader

@@ -1,19 +1,5 @@
 # ubs-atomic 开发者指南
 
-## 目录
-
-1. [项目架构说明](#1-项目架构说明)
-2. [环境搭建步骤](#2-环境搭建步骤)
-3. [代码目录结构](#3-代码目录结构)
-4. [构建流程](#4-构建流程)
-5. [部署指南](#5-部署指南)
-6. [API 接口文档](#6-api-接口文档)
-7. [第三方系统接入说明](#7-第三方系统接入说明)
-8. [贡献代码规范](#8-贡献代码规范)
-9. [测试策略与方法](#9-测试策略与方法)
-10. [版本控制流程](#10-版本控制流程)
-11. [内部实现机制](#11-内部实现机制)
-
 ---
 
 ## 1. 项目架构说明
@@ -23,7 +9,7 @@
 ubs-atomic 采用分层架构设计，核心组件之间解耦且职责清晰：
 
 ```text
-┌────────────────────────────────────────────────────────────┐
+┌─────────────────────────────────────────────────────────────┐
 │                        应用层                               │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────┐              │
 │  │ 业务代码  │  | 业务代码  │  │    业务代码   │             │
@@ -110,6 +96,7 @@ sudo yum install -y git cmake gcc gcc-c++ make
 
 # Ubuntu/Debian
 sudo apt-get install -y git cmake gcc g++ make
+
 ```
 
 #### 2.3.2 运行时依赖
@@ -120,6 +107,7 @@ sudo yum install -y glibc-devel libstdc++-devel
 
 # 或
 sudo apt-get install -y libc6-dev libstdc++6
+
 ```
 
 #### 2.3.3 测试依赖
@@ -130,6 +118,7 @@ sudo yum install -y lcov genhtml dos2unix
 
 # 或
 sudo apt-get install -y lcov dos2unix
+
 ```
 
 #### 2.3.4 三方库
@@ -138,7 +127,7 @@ sudo apt-get install -y lcov dos2unix
 |-----|------|---------|
 | libboundscheck.so | 边界检查库 | 系统安装 |
 | googletest | 单元测试框架 | 构建时自动从 openEuler 开源件 src-openeuler/googletest 拉取（可放置本地源码到 test/3rdparty/googletest 优先使用） |
-| mockcpp | 模拟测试框架 | git submodule |
+| mockcpp | 模拟测试框架 | 手动克隆（`gitee.com/mirrors_sinojelly/mockcpp.git`，v2.7 tag） |
 
 > 完整三方件来源、许可证与静态/动态引用清单见 [doc/3rdparty_open_source_components.md](3rdparty_open_source_components.md)。
 

@@ -94,6 +94,7 @@ g++ -g -O3 -fno-omit-frame-pointer \
     -l/usr/local/ubs_mem/include/ -L/usr/local/ubs_mem/lib \
     -Wl,-rpath,'/usr/local/ubs_mem/lib' -Wl,-rpath,'$ORIGIN'
 ```
+
 > [!NOTE] 说明
 > 请根据实际安装路径替换上述 `-I` 和 `-L` 参数。
 
