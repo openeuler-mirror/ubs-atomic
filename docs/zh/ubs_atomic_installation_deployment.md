@@ -9,12 +9,12 @@
 | 服务器名称 | TaiShan 服务器 |
 | ----- | ----- |
 | 处理器 | 鲲鹏处理器（ARM64/aarch64） |
-| CPU | 要求支持 LSE 原子指令集（ARMv8.1-A 及以上），可通过命令 `grep -o 'lse' /proc/cpuinfo | head -1` 检查，有输出即表示支持 |
+| CPU | 要求支持 LSE 原子指令集（ARMv8.1-A 及以上）<br>可通过命令 `grep -o 'lse' /proc/cpuinfo \| head -1` 检查，有输出即表示支持 |
 
-说明：
-
-- ubs-atomic 默认使用 `-march=armv8-a+lse` 编译选项以获得最优原子操作性能，ARM64 平台为当前配套目标平台。
-- x86_64 平台可编译运行，但不在默认配套范围内，需自行调整编译选项。
+> [!NOTE] 说明
+>
+> - ubs-atomic 默认使用 `-march=armv8-a+lse` 编译选项以获得最优原子操作性能，ARM64 平台为当前配套目标平台。
+> - x86_64 平台可编译运行，但不在默认配套范围内，需自行调整编译选项。
 
 ### 软件版本
 
@@ -72,7 +72,8 @@
    rpm -ivh ubs-atomic-1.0.0-1.aarch64.rpm
    ```
 
-   说明：RPM 包同时包含运行库和开发头文件，安装后即可进行二次开发，无需额外安装 devel 包。
+   > [!NOTE] 说明
+   > RPM 包同时包含运行库和开发头文件，安装后即可进行二次开发，无需额外安装 devel 包。
 
 3. 执行以下命令，验证安装。
 
@@ -91,7 +92,7 @@
 | 产物 | 安装路径 |
 | ---- | ------ |
 | 共享库 | /usr/lib64/libubs-atomic.so |
-| 头文件 | /usr/include/ub_dist_lock.h、/usr/include/ub_dist_comm_queue.h、/usr/include/ub_dist_tx_res.h |
+| 头文件 | <ul><li>/usr/include/ub_dist_lock.h</li> <li>/usr/include/ub_dist_comm_queue.h</li> <li>/usr/include/ub_dist_tx_res.h</li></ul> |
 
 RPM 安装产物位于系统库目录和系统头文件目录，编译链接时通常无需额外设置 `LD_LIBRARY_PATH`：
 
@@ -173,4 +174,5 @@ gcc my_app.c -I/usr/include -lubs-atomic -lpthread -lrt -o my_app
 rpm -e ubs-atomic
 ```
 
-说明：卸载不会回收业务已创建的共享内存对象，请通过共享内存管理工具（如 `sample_code/share_mem/ubsm_shm_creator`）单独清理。
+> [!NOTE] 说明
+> 卸载不会回收业务已创建的共享内存对象，请通过共享内存管理工具（如 `sample_code/share_mem/ubsm_shm_creator`）单独清理。

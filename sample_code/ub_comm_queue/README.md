@@ -4,7 +4,7 @@
 
 ## 工作原理
 
-```
+```text
   Node A (Ping)                          Node B (Pong)
   ┌──────────┐      PING (ring_A)       ┌──────────┐
   │          │ ───────────────────────► │          │
@@ -80,6 +80,7 @@ make -j
 ```
 
 编译产物：
+
 - `build/lib/libubs-atomic.so` — 通信队列共享库
 
 ### 2. 编译 pingpong demo
@@ -94,6 +95,7 @@ g++ -g -O3 -fno-omit-frame-pointer \
     -Wl,-rpath,'/usr/local/ubs_mem/lib' -Wl,-rpath,'$ORIGIN'
 ```
 
+> [!NOTE] 说明
 > 请根据实际安装路径替换上述 `-I` 和 `-L` 参数。
 
 ### 3. 设置运行时库路径
@@ -116,11 +118,12 @@ export LD_LIBRARY_PATH=/path/to/ubs-atomic/build/lib:/path/to/ubs_mem/lib:$LD_LI
 ./pingpong --role A
 ```
 
-> **提示**：A 启动后会自动等待 3 秒，确保 B 已完成初始化。如需调整等待时间，可修改源码中 `g_wait_b_ready_s` 变量。
+> [!TIP] 提示
+> A 启动后会自动等待 3 秒，确保 B 已完成初始化。如需调整等待时间，可修改源码中 `g_wait_b_ready_s` 变量。
 
 ### 完整参数
 
-```
+```text
 Usage: ./pingpong --role A|B [options]
 
 Required:
@@ -158,7 +161,7 @@ Role B (pong) options:
 
 ### A 端输出
 
-```
+```text
 ===== A Node Stats (msg_size=64) =====
 Expected: 10000 | Received PONG: 10000
 
@@ -187,7 +190,7 @@ Expected: 10000 | Received PONG: 10000
 
 ### B 端输出
 
-```
+```text
 [B] pong_sent=1000 avg_b_process(ns)=180.50
 
 ===== B Summary (msg_size=64) =====

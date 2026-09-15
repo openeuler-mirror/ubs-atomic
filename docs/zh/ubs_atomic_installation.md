@@ -28,7 +28,7 @@
 
 - 在线安装
 
-  > [!NOTE]说明
+  > [!NOTE] 说明
   >
   > 在线安装过程中，所需依赖会自动进行安装。
 
@@ -40,7 +40,7 @@
 
 - 离线安装
 
-  > [!WARNING]说明
+  > [!TIP] 须知
   >
   > 离线安装需要提前安装所需依赖。
   > ubs-atomic 运行依赖信息记录在 <code>CMakeLists.txt</code> 的 CPack 配置中。
@@ -96,7 +96,7 @@ cd ubs-atomic
 docker build -f docker/ubs-atomic.Dockerfile -t ubs-atomic-build:24.03-lts .
 ```
 
-> [!NOTE]说明
+> [!NOTE] 说明
 >
 > 构建依赖与仓库 <code>README.md</code> "环境与依赖"章节保持一致；googletest 由 CMake 自动从 src-openeuler 开源仓库下载，mock 测试桩框架需按 <code>README.md</code> 说明手动放置到 <code>test/3rdparty/</code> 对应目录，均无需在镜像内预装。
 > aarch64 主机直接构建即可；x86_64 主机可加 <code>--platform linux/arm64</code> 构建镜像（仅用于验证 Dockerfile，容器内交叉编译极慢，不推荐）。
@@ -204,25 +204,25 @@ gcc your_app.c -lubs-atomic -o your_app
 
 1. 停止并删除容器
 
-   ```bash
-   docker ps -a
-   docker stop ubs-atomic-build
-   docker rm ubs-atomic-build
-   ```
+    ```bash
+    docker ps -a
+    docker stop ubs-atomic-build
+    docker rm ubs-atomic-build
+    ```
 
 2. 删除镜像
 
-   ```bash
-   docker rmi ubs-atomic-build:24.03-lts
-   ```
+    ```bash
+    docker rmi ubs-atomic-build:24.03-lts
+    ```
 
 3. 卸载 RPM 包
 
-   ```bash
-   sudo dnf remove -y ubs-atomic
-   # 或
-   sudo rpm -e ubs-atomic
-   ```
+    ```bash
+    sudo dnf remove -y ubs-atomic
+    # 或
+    sudo rpm -e ubs-atomic
+    ```
 
 > [!NOTE]说明
 >
