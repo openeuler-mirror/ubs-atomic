@@ -275,14 +275,14 @@ ub_comm_queue_deinit(handle);
 
 | 配置项 | 类型 | 说明 | 默认值 |
 |-------|------|------|-------|
-| lease_time | uint32_t | 锁租约时间（毫秒） | 60000 |
-| heartbeat_timeout | uint32_t | 心跳超时时间（毫秒） | 500 |
+| lease_time | uint32_t | 锁租约时间（ms） | 60000 |
+| heartbeat_timeout | uint32_t | 心跳超时时间（ms） | 500 |
 
 #### 4.1.2 加锁策略 (ub_lock_policy_t)
 
 | 配置项 | 类型 | 说明 |
 |-------|------|------|
-| timeout_ts | uint32_t | 加锁超时时间（毫秒） |
+| timeout_ts | uint32_t | 加锁超时时间（ms） |
 | allow_delay_release | bool | 是否允许延迟释放 |
 | recursive | bool | 是否允许递归加锁 |
 
