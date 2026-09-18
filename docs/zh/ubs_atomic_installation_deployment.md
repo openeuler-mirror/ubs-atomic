@@ -32,7 +32,7 @@
 
 ### 前提条件
 
-前置依赖 libboundscheck（openEuler 开源的安全函数库），可通过以下方式安装。
+前置依赖 libboundscheck（openEuler 开源的安全函数库），可通过以下方式安装：
 
 - 有 openEuler yum/dnf 镜像源时，可以直接安装。
 

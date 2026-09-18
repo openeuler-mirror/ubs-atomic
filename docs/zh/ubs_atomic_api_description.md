@@ -4,9 +4,9 @@
 
 ubs-atomic 对外提供 C ABI 接口，当前对外能力包括：
 
-- 分布式读写锁（S/SX/X 模式）、分布式互斥锁、分布式自旋锁
-- 分布式共享内存通信队列
-- 分布式事务资源原子操作（含内存屏障）
+- 分布式读写锁（S/SX/X 模式）、分布式互斥锁、分布式自旋锁。
+- 分布式共享内存通信队列。
+- 分布式事务资源原子操作（含内存屏障）。
 
 ### 头文件列表
 
@@ -351,7 +351,7 @@ ub_lock_result_t ub_mutex_lock(ub_mutex_lock_t *lock, time_ms_t timeout_ms, cons
 | 参数名 | 数据类型 | 参数类型 | 描述 |
 | ----------------- | --------------------- | ---- | ------------ |
 | lock | ub_mutex_lock_t \* | 入参 | 共享内存互斥锁对象地址，且已初始化。 |
-| timeout_ms | time_ms_t | 入参 | 超时时间，单位毫秒；0 表示使用默认值 10000ms。 |
+| timeout_ms | time_ms_t | 入参 | 超时时间，单位 ms；0 表示使用默认值 10000ms。 |
 | location | const ub_location_t \* | 入参 | 调用者位置。 |
 
 **返回值**
@@ -429,7 +429,7 @@ ub_lock_result_t ub_spin_lock(ub_spin_lock_t *lock, time_ms_t timeout_ms, const 
 | 参数名 | 数据类型 | 参数类型 | 描述 |
 | ----------------- | --------------------- | ---- | ------------ |
 | lock | ub_spin_lock_t \* | 入参 | 共享内存自旋锁对象地址，且已初始化。 |
-| timeout_ms | time_ms_t | 入参 | 超时时间，单位毫秒；0 表示使用默认值 10000ms。 |
+| timeout_ms | time_ms_t | 入参 | 超时时间，单位 ms；0 表示使用默认值 10000ms。 |
 | location | const ub_location_t \* | 入参 | 调用者位置。 |
 
 **返回值**
@@ -496,11 +496,11 @@ int ub_comm_queue_init(ub_shm_comm_t *handle, ub_shm_area_t *init_region, ub_rin
 | 0 | 操作成功。 |
 | 负数错误码 | 参数错误（如 -EINVAL）、内存不足（-ENOMEM）等。 |
 
-说明：
-
-- 第一个初始化成功的通信实例会被内部标记为分布式锁使用的实例。
-- 集群最大节点数为 16；`priority` 取值 0~7，其中 0 为内部保留，业务 Ring 配置不得使用。
-- 初始化成功后必须调用 `ub_comm_queue_deinit` 释放实例。
+> [!NOTE] 说明
+>
+> - 第一个初始化成功的通信实例会被内部标记为分布式锁使用的实例。
+> - 集群最大节点数为 16；`priority` 取值 0~7，其中 0 为内部保留，业务 Ring 配置不得使用。
+> - 初始化成功后必须调用 `ub_comm_queue_deinit` 释放实例。
 
 #### ub_comm_queue_deinit
 
@@ -599,7 +599,7 @@ int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t pri
 | ----------------- | --------------------- | ---- | ------------ |
 | handle | ub_shm_comm_t \* | 入参 | 通信实例句柄。 |
 | node_id | uint8_t | 入参 | 待查询节点 ID，必须存在于当前节点映射表。 |
-| priority | uint8_t | 入参 | 待查询 Ring 优先级，取值 0~7。 |
+| priority | uint8_t | 入参 | 待查询 Ring 优先级，取值 1~7。 |
 | status | ub_comm_queue_status_t \* | 出参 | 输出状态快照（used/total/free、队列状态、拥塞阈值、最大深度等）。 |
 
 **返回值**
@@ -609,7 +609,8 @@ int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t pri
 | 0 | 操作成功。 |
 | 负数错误码 | Ring 不存在、节点未就绪、参数错误等。 |
 
-说明：返回的是原子快照，适合维测和流控估计，不提供强一致队列长度语义。
+> [!NOTE] 说明
+> 返回的是原子快照，适合维测和流控估计，不提供强一致队列长度语义。
 
 #### ub_comm_queue_set_congestion_threshold
 
@@ -665,7 +666,8 @@ int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle, const ub_comm_queue_he
 | 0 | 操作成功。 |
 | 负数错误码 | 参数错误等。 |
 
-说明：本节点观察某个 peer 的实际超时窗口为 `max(timeout_ms, peer heartbeat_interval_ms * 3, check_interval_ms * 2)`，用于避免节点间心跳配置不一致导致误判。
+> [!NOTE] 说明
+> 本节点观察某个 peer 的实际超时窗口为 `max(timeout_ms, peer heartbeat_interval_ms * 3, check_interval_ms * 2)`，用于避免节点间心跳配置不一致导致误判。
 
 #### ub_comm_queue_check_ready
 
@@ -722,7 +724,8 @@ int ub_comm_queue_register_process_func(ub_shm_comm_t *handle, uint8_t msg_type,
 | 0 | 操作成功。 |
 | 负数错误码 | 参数错误等。 |
 
-说明：同一个 `msg_type` 重复注册会覆盖旧回调；已被分发线程取出或已投递线程池的消息可能仍使用旧回调执行。
+> [!NOTE] 说明
+> 同一个 `msg_type` 重复注册会覆盖旧回调；已被分发线程取出或已投递线程池的消息可能仍使用旧回调执行。
 
 ### 分布式事务资源
 

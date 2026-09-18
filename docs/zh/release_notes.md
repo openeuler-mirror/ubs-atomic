@@ -18,7 +18,7 @@
 | ----- | ----- |
 | 服务器名称 | TaiShan 服务器 |
 | 处理器 | 鲲鹏处理器（ARM64/aarch64） |
-| CPU | 要求支持 LSE 原子指令集（ARMv8.1-A 及以上）<br>可通过命令 `grep -o 'lse' /proc/cpuinfo \| head -1` 检查，有输出即表示支持 |
+| CPU | 要求支持 LSE 原子指令集（ARMv8.1-A 及以上）<br>可通过命令 `grep -o 'lse' /proc/cpuinfo \| head -1` 检查，有输出即表示支持。 |
 
 **软件版本配套表**
 
@@ -77,7 +77,7 @@ UBS Atomic 支持 fence、add 原子操作。
 
 |文档名称|内容简介|
 |---|---|
-|《[安装部署](../zh/ubs_atomic_installation_deployment.md)》|提供安装UBS Atomic的安装部署、卸载等操作。|
+|《[安装部署](../zh/ubs_atomic_installation_deployment.md)》|提供UBS Atomic的安装部署、卸载等操作。|
 |《[API接口](../zh/ubs_atomic_api_description.md)》|提供对外的C ABI接口。|
 |《[配置说明](../zh/ubs_atomic_configuration_instructions.md)》|提供UBS Atomic的构建配置项和运行时配置项，以及各配置项的取值范围、默认值和配置建议。|
 |《[安全说明](../zh/ubs_atomic_security_instructions.md)》|提供UBS Atomic在构建、部署和运行阶段涉及的安全机制、访问控制要求和安全使用约束。|

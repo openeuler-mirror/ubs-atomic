@@ -102,7 +102,7 @@ void setup_log(void)
 **全局约束**
 
 - 当前最大节点数为 16。
-- 当前最大优先级级别个数为 8，即 `priority` 取值范围为 `0~7`，数值越小级别越高，。
+- 当前最大优先级级别个数为 8，即 `priority` 取值范围为 `0~7`，数值越小级别越高。
 - `priority == 0` 为内部分布式锁 Ring 和系统消息保留，业务 Ring 配置不得使用 0。
 - 系统保留消息类型包括 `0xFF`、`0xFE`、`0xFD`，业务侧不应直接发送或注册这些消息类型。
 - `ring_capacity` 必须是 2 的幂。
@@ -193,9 +193,9 @@ void setup_log(void)
 
 | 字段 | 类型 | 说明 | 参数有效性规格 |
 | --- | --- | --- | --- |
-| `heartbeat_interval_ms` | `uint32_t` | 本节点消费者心跳序号刷新周期，单位毫秒；会发布给其他节点用于超时窗口计算 | 必须大于 0 |
-| `check_interval_ms` | `uint32_t` | 本节点生产者心跳监控线程轮询周期，单位毫秒 | 必须大于 0 |
-| `timeout_ms` | `uint32_t` | 本节点观察 peer 的最小超时阈值，单位毫秒 | 必须大于 0，且不小于 `2 * check_interval_ms` |
+| `heartbeat_interval_ms` | `uint32_t` | 本节点消费者心跳序号刷新周期，单位ms；会发布给其他节点用于超时窗口计算 | 必须大于 0 |
+| `check_interval_ms` | `uint32_t` | 本节点生产者心跳监控线程轮询周期，单位ms | 必须大于 0 |
+| `timeout_ms` | `uint32_t` | 本节点观察 peer 的最小超时阈值，单位ms | 必须大于 0，且不小于 `2 * check_interval_ms` |
 
 ### 2.3 `ub_comm_queue_init`
 
@@ -373,10 +373,6 @@ int ret = ub_comm_queue_config_heartbeat(&handle, &req, &eff);
 
 - 当前不建议业务依赖该接口完成收包；请优先使用 `ub_comm_queue_register_process_func` 注册回调。
 
-**约束与注意事项**
-
-- 当前不建议业务依赖该接口完成收包；请优先使用 `ub_comm_queue_register_process_func` 注册回调。
-
 ### 2.10 `ub_comm_queue_register_process_func`
 
 | 项目 | 内容 |
@@ -502,7 +498,7 @@ int comm_example(void)
 | --- | --- | --- | --- | --- |
 | `ub_location_t` | `tid` | `int32_t` | 线程 ID 或业务逻辑线程 ID | 同一节点内应能唯一标识调用者 |
 | `ub_location_t` | `node_id` | `uint8_t` | 逻辑节点 ID | 应与通信/锁集群节点 ID 一致 |
-| `ub_lock_policy_t` | `timeout_ts` | `time_ms_t` | 绝对超时时间戳，单位毫秒 | 传入 `NULL` 策略时使用默认值 `10000` |
+| `ub_lock_policy_t` | `timeout_ts` | `time_ms_t` | 绝对超时时间，单位ms | 传入 `NULL` 策略时使用默认值 `10000` |
 | `ub_lock_policy_t` | `allow_delay_release` | `bool` | 是否允许延迟释放 | 传入 `NULL` 策略时默认 `false` |
 | `ub_lock_policy_t` | `recursive` | `bool` | 是否允许递归加锁 | 传入 `NULL` 策略时默认 `false` |
 | `ub_lock_config_t` | `lease_time` | `time_ms_t` | 分布式锁租约时长 | 传入 `NULL` 配置时默认 `60000` |
@@ -683,7 +679,7 @@ int comm_example(void)
 | 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
 | --- | --- | --- | --- |
 | `lock` | `ub_mutex_lock_t *` | 共享内存互斥锁对象地址 | 非空，且已通过 `ub_mutex_lock_create` 初始化 |
-| `timeout_ms` | `time_ms_t` | 超时时间，单位毫秒 | 0 表示使用默认值 10000ms |
+| `timeout_ms` | `time_ms_t` | 超时时间，单位ms | 0 表示使用默认值 10000ms |
 | `location` | `const ub_location_t *` | 调用者位置 | 非空 |
 
 #### `ub_mutex_unlock`
@@ -730,7 +726,7 @@ int comm_example(void)
 | 参数名 | 参数类型 | 参数类型说明 | 参数有效性规格 |
 | --- | --- | --- | --- |
 | `lock` | `ub_spin_lock_t *` | 共享内存自旋锁对象地址 | 非空，且已通过 `ub_spin_lock_init` 初始化 |
-| `timeout_ms` | `time_ms_t` | 超时时间，单位毫秒 | 0 表示使用默认值 10000ms |
+| `timeout_ms` | `time_ms_t` | 超时时间，单位ms | 0 表示使用默认值 10000ms |
 | `location` | `const ub_location_t *` | 调用者位置 | 非空 |
 
 #### `ub_spin_unlock`
@@ -803,7 +799,7 @@ void spin_lock_example(void)
 
 ### 4.1 模块说明
 
-事务资源接口把调用方传入的 `uint64_t` 存储地址视作一个共享原子值，提供初始化、设置、读取和原子加法能力。
+事务资源接口把调用方传入的 `uint64_t` 内存地址视作一个共享原子值，提供初始化、设置、读取和原子加法能力。
 
 | 名称 | 值 | 说明 |
 | --- | ---: | --- |
