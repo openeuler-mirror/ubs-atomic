@@ -140,6 +140,49 @@ TEST(UbDistributeLockApiTest, UnlockApisReturnErrorOnNullArgs)
     GlobalMockObject::verify();
 }
 
+TEST(UbDistributeLockApiTest, RecoverPreservesOtherNodeExclusiveOwner)
+{
+    for (ub_lock_mode_t mode : {UB_LOCK_X, UB_LOCK_SX}) {
+        ub_rw_lock_t lock{};
+        InitRecoverLock(lock);
+        const uint64_t owner = MakeOwner(3, 33);
+        const int32_t state = mode == UB_LOCK_X ? 0 : X_LOCK_HALF_DECR;
+        auto &owner_slot = mode == UB_LOCK_X ? lock.lock_owner_x : lock.lock_owner_sx;
+        auto &recursive = mode == UB_LOCK_X ? lock.x_recursive : lock.sx_recursive;
+        lock.lock_word.store(state);
+        owner_slot.store(owner);
+        recursive.store(3u);
+        lock.reserve_lock_owner.store(owner);
+        const auto location = MakeLocation(1, 11);
+        EXPECT_EQ(ub_rw_lock_recover(&lock, 2, &location), UB_LOCK_SUCCESS);
+        EXPECT_EQ(lock.lock_word.load(), state);
+        EXPECT_EQ(owner_slot.load(), owner);
+        EXPECT_EQ(recursive.load(), 3u);
+        EXPECT_EQ(lock.reserve_lock_owner.load(), owner);
+        EXPECT_EQ(lock.shared_owner_bitmap.load(), 0u);
+        EXPECT_EQ(lock.is_inited.load(), 1);
+    }
+}
+
+TEST(UbDistributeLockApiTest, RecoverPreservesOtherNodeSharedSxOwners)
+{
+    ub_rw_lock_t lock{};
+    InitRecoverLock(lock);
+    const uint64_t owner = MakeOwner(3, 33);
+    lock.lock_word.store(X_LOCK_HALF_DECR - 1);
+    lock.lock_owner_sx.store(owner);
+    lock.sx_recursive.store(2u);
+    lock.shared_owner_bitmap.store(1u << 4);
+    lock.reserve_lock_owner.store(owner);
+    const auto location = MakeLocation(1, 11);
+    EXPECT_EQ(ub_rw_lock_recover(&lock, 2, &location), UB_LOCK_SUCCESS);
+    EXPECT_EQ(lock.lock_word.load(), X_LOCK_HALF_DECR - 1);
+    EXPECT_EQ(lock.lock_owner_sx.load(), owner);
+    EXPECT_EQ(lock.sx_recursive.load(), 2u);
+    EXPECT_EQ(lock.shared_owner_bitmap.load(), 1u << 4);
+    EXPECT_EQ(lock.reserve_lock_owner.load(), owner);
+}
+
 TEST(UbDistributeLockApiTest, RecoverHandlesXLockHalfWrittenDuringLock)
 {
     ub_rw_lock_t lock{};
