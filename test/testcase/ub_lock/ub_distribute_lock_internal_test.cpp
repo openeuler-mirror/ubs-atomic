@@ -748,6 +748,59 @@ TEST_F(UbDistLockMemberTest, RebuildRejectsMissingOldLocalLock)
     delete old_lock;
 }
 
+TEST_F(UbDistLockMemberTest, RebuildRejectsCreateInProgressAndUnknownState)
+{
+    for (int32_t state : {-2, -3}) {
+        ub_rw_lock_t old_lock{};
+        auto ll = std::make_shared<LocalLock>(&old_lock);
+        register_local_lock(&old_lock, ll);
+        ub_lock_query_result_t entry = MakeEntry(1, UB_LOCK_I, 0, 0, false, UB_LOCK_I);
+        ub_lock_rebuild_info_t info{&entry, 1};
+        shm_->is_inited.store(state);
+        EXPECT_EQ(lock_->rebuild(&old_lock, info, ub_location_t{11, 1}), UB_LOCK_ERROR);
+        EXPECT_EQ(shm_->is_inited.load(), state);
+        EXPECT_EQ(lookup_local_lock(&old_lock), ll);
+        EXPECT_EQ(ll->ub_lock_ptr_, &old_lock);
+        EXPECT_EQ(shm_->node_registry[1], 0u);
+        (void)unregister_local_lock(&old_lock);
+        (void)unregister_local_lock(shm_);
+    }
+}
+
+TEST_F(UbDistLockMemberTest, RebuildBindingFailureRestoresEmpty)
+{
+    ub_rw_lock_t old_lock{};
+    auto ll = std::make_shared<LocalLock>(&old_lock);
+    register_local_lock(&old_lock, ll);
+    ub_lock_query_result_t entry = MakeEntry(1, UB_LOCK_I, 0, 0, false, UB_LOCK_I);
+    ub_lock_rebuild_info_t info{&entry, 1};
+    MOCKER(switch_local_lock_binding).stubs().will(returnValue(std::shared_ptr<LocalLock>{}));
+    EXPECT_EQ(lock_->rebuild(&old_lock, info, ub_location_t{11, 1}), UB_LOCK_ERROR);
+    EXPECT_EQ(shm_->is_inited.load(), 0);
+    EXPECT_EQ(lookup_local_lock(&old_lock), ll);
+    GlobalMockObject::verify();
+    (void)unregister_local_lock(&old_lock);
+}
+
+TEST_F(UbDistLockMemberTest, RebuildBindingExceptionRestoresEmptyAndAllowsRetry)
+{
+    ub_rw_lock_t old_lock{};
+    auto ll = std::make_shared<LocalLock>(&old_lock);
+    register_local_lock(&old_lock, ll);
+    ub_lock_query_result_t entry = MakeEntry(1, UB_LOCK_I, 0, 0, false, UB_LOCK_I);
+    ub_lock_rebuild_info_t info{&entry, 1};
+    MOCKER(switch_local_lock_binding).stubs().will(throws(std::bad_alloc()));
+    EXPECT_NO_THROW(EXPECT_EQ(lock_->rebuild(&old_lock, info, ub_location_t{11, 1}), UB_LOCK_ERROR));
+    EXPECT_EQ(shm_->is_inited.load(), 0);
+    EXPECT_EQ(lookup_local_lock(&old_lock), ll);
+    GlobalMockObject::verify();
+    ASSERT_EQ(shm_->is_inited.load(), 0);
+    EXPECT_EQ(lock_->rebuild(&old_lock, info, ub_location_t{11, 1}), UB_LOCK_SUCCESS);
+    EXPECT_EQ(shm_->is_inited.load(), 1);
+    EXPECT_EQ(lookup_local_lock(shm_), ll);
+    (void)unregister_local_lock(&old_lock);
+}
+
 TEST_F(UbDistLockMemberTest, RebuildSucceedsWithXHolder)
 {
     auto *old_lock = new ub_rw_lock_t{};
