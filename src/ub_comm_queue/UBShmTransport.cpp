@@ -371,8 +371,17 @@ int UBShmTransport::build_node_mapping(const ub_ring_region_map_t *ring_map)
 {
     std::set<uint32_t> all_ids;
     for (uint32_t i = 0; i < ring_map->count; ++i) {
-        all_ids.insert(ring_map->entries[i].node_id);
-        ATOMIC_LOG(LOG_LEVEL_DEBUG, "Add Node ID: %u", ring_map->entries[i].node_id);
+        // node_id 为 uint8_t（可到 255），但 ring_caches_/remote_lookup_table_ 等内部数组仅
+        // [MAX_NODES_LIMIT][MAX_PRIORITY_LEVELS]。必须在建映射时拒绝越界 node_id，否则非法 id
+        // 会进入 node_id_to_idx_/idx_to_node_id_，后续以逻辑 node_id 直接下标访问将越界写相邻内存。
+        const uint32_t nid = ring_map->entries[i].node_id;
+        if (nid >= MAX_NODES_LIMIT) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid node_id %u at ring map index %u, must be < %u", nid, i,
+                       MAX_NODES_LIMIT);
+            return -EINVAL;
+        }
+        all_ids.insert(nid);
+        ATOMIC_LOG(LOG_LEVEL_DEBUG, "Add Node ID: %u", nid);
     }
     // 限制检查
     if (all_ids.size() > MAX_NODES_LIMIT || all_ids.size() != conf_.max_nodes) {
@@ -1349,6 +1358,11 @@ int UBShmTransport::set_is_for_lock(bool is_for_lock)
 int UBShmTransport::try_populate_cache(uint32_t node_id, uint32_t prio)
 {
     ATOMIC_LOG(LOG_LEVEL_DEBUG, "Trying to populate cache for node %d, priority %d", node_id, prio);
+    // 纵深防御：ring_caches_ 仅 [MAX_NODES_LIMIT][MAX_PRIORITY_LEVELS]，node_id/prio 越界会破坏相邻内存。
+    if (node_id >= MAX_NODES_LIMIT) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid node_id %u exceeds MAX_NODES_LIMIT %u", node_id, MAX_NODES_LIMIT);
+        return -EINVAL;
+    }
     if (prio >= MAX_PRIORITY_LEVELS) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid priority %u", prio);
         return -EINVAL;
