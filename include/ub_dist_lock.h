@@ -169,6 +169,7 @@ ub_lock_result_t ub_rw_lock_sx_unlock(ub_rw_lock_t *lock, const ub_lock_policy_t
 
 /*
  * @brief recover a lock held by a failed process.
+ * @note 调用方须确保同一锁的加锁、解锁操作已停止且恢复期间不会并发执行；本接口不提供在线恢复互斥。
  * @param[in] lock         : pointer to shared-memory lock object
  * @param[in] process_id   : process id
  * @param[in] location     : caller location (node/thread)

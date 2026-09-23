@@ -1537,6 +1537,7 @@ void DistributedLock::recover_shared_lock(uint32_t process_id)
     }
 }
 
+// 以下恢复路径依赖调用方停止并发加解锁；无 owner 的锁字可能是故障进程留下的半写状态，仍需清理。
 void DistributedLock::recover_exclusive_x(uint32_t process_id)
 {
     uint64_t owner = LOCK_INVALID_OWNER;
