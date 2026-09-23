@@ -7,6 +7,7 @@
 #include <ctime>
 #include <functional>
 #include <memory>
+#include <new>
 #include <thread>
 #include <vector>
 
@@ -17,6 +18,51 @@
 #include "UBShmTransport.h"
 #undef private
 #include "ub_dist_comm_queue.h"
+
+namespace {
+// 仅 UT 替换分配器；故障开关限于当前线程，且只影响下一次分配。
+thread_local bool g_fail_next_allocation = false;
+
+class ScopedAllocationFailure {
+public:
+    ScopedAllocationFailure()
+    {
+        g_fail_next_allocation = true;
+    }
+    ~ScopedAllocationFailure()
+    {
+        g_fail_next_allocation = false;
+    }
+};
+} // namespace
+
+void *operator new(std::size_t size)
+{
+    if (g_fail_next_allocation) {
+        g_fail_next_allocation = false;
+        throw std::bad_alloc();
+    }
+    while (true) {
+        if (void *ptr = std::malloc(size == 0 ? 1 : size)) {
+            return ptr;
+        }
+        auto handler = std::get_new_handler();
+        if (handler == nullptr) {
+            throw std::bad_alloc();
+        }
+        handler();
+    }
+}
+
+void operator delete(void *ptr) noexcept
+{
+    std::free(ptr);
+}
+
+void operator delete(void *ptr, std::size_t) noexcept
+{
+    std::free(ptr);
+}
 
 namespace ub_comm_queue {
 namespace ut {
@@ -441,6 +487,73 @@ TEST(UbCommQueueApiTest, AsyncCallbackDispatchesThroughThreadPool)
                           []() { return g_async_callback_count.load(std::memory_order_acquire) == 1; }));
 
     EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
+}
+
+// 问题#12：无线程和已关闭的线程池均会抛异常，失败后同步和异步分发应仍可继续。
+TEST_F(UbCommQueueFaultTest, AsyncDispatchRecoversAfterEnqueueFailure)
+{
+    g_async_callback_count.store(0, std::memory_order_release);
+    UBShmTransport transport;
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_ASYNC, AsyncCallback, nullptr), UB_COMM_OK);
+    auto hdr = MakeMessage(8).header;
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), -EPIPE);
+
+    transport.worker_pool_ = new ThreadPool(0);
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), -EPIPE);
+    EXPECT_TRUE(transport.worker_pool_->taskQueue_.empty());
+    transport.worker_pool_->shuttingDown_.store(true, std::memory_order_release);
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), -EPIPE);
+    EXPECT_TRUE(transport.worker_pool_->taskQueue_.empty());
+    EXPECT_EQ(g_async_callback_count.load(std::memory_order_acquire), 0u);
+
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_SYNC, AsyncCallback, nullptr), UB_COMM_OK);
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), UB_COMM_OK);
+    EXPECT_EQ(g_async_callback_count.load(std::memory_order_acquire), 1u);
+
+    delete transport.worker_pool_;
+    transport.worker_pool_ = nullptr;
+    transport.worker_pool_ = new ThreadPool(1);
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_ASYNC, AsyncCallback, nullptr), UB_COMM_OK);
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), UB_COMM_OK);
+    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(300),
+                          []() { return g_async_callback_count.load(std::memory_order_acquire) == 2; }));
+}
+
+void CheckAsyncAllocationFailure(uint32_t bodyLength)
+{
+    g_async_callback_count.store(0, std::memory_order_release);
+    UBShmTransport transport;
+    transport.worker_pool_ = new ThreadPool(1);
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_ASYNC, AsyncCallback, nullptr), UB_COMM_OK);
+    struct {
+        message_header_t header;
+        char body[128];
+    } packet{};
+    packet.header = MakeMessage(8).header;
+    packet.header.body_length = bodyLength;
+    const uint32_t len = sizeof(message_header_t) + bodyLength;
+    int result = UB_COMM_OK;
+    {
+        ScopedAllocationFailure failure;
+        EXPECT_NO_THROW(result = transport.dispatch_internal(&packet, len));
+    }
+    EXPECT_EQ(result, -ENOMEM);
+    EXPECT_EQ(g_async_callback_count.load(std::memory_order_acquire), 0u);
+    EXPECT_EQ(transport.dispatch_internal(&packet, len), UB_COMM_OK);
+    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(300),
+                          []() { return g_async_callback_count.load(std::memory_order_acquire) == 1; }));
+}
+
+TEST_F(UbCommQueueFaultTest, AsyncDispatchHandlesBodyCopyAllocationFailure)
+{
+    // 超过短字符串优化容量，第一次分配发生于 body_copy 构造。
+    CheckAsyncAllocationFailure(128);
+}
+
+TEST_F(UbCommQueueFaultTest, AsyncDispatchHandlesTaskAllocationFailure)
+{
+    // 空消息体无需分配，第一次分配发生于 enqueue 创建任务。
+    CheckAsyncAllocationFailure(0);
 }
 
 TEST(UbCommQueueApiTest, UBCQ_IF_RCV_EER_001_QueryDefaultHeartbeatConfig)
