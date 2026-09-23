@@ -1425,8 +1425,11 @@ ub_lock_result_t DistributedLock::rebuild(ub_rw_lock_t *old_lock, const ub_lock_
             }
 
             if (reserve_entry != nullptr) {
+                // 延迟令牌保留节点路由信息，但不属于执行恢复的线程。
                 replay_delayed_release_state(rw_lock_shm_, reserve_entry, shared_bitmap, shared_count, sx_holder,
-                                             make_global_owner(reserve_entry->node_id, location.tid));
+                                             make_global_owner(reserve_entry->node_id, 0));
+                ATOMIC_LOG(LOG_LEVEL_INFO, "rebuild delayed token: lock=%p node=%u reserve_mode=%d",
+                           static_cast<void *>(rw_lock_shm_), reserve_entry->node_id, reserve_entry->reserve_mode);
             }
             rw_lock_shm_->shared_owner_bitmap.store(shared_bitmap, std::memory_order_release);
         }
