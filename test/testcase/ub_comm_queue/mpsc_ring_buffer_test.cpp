@@ -584,5 +584,59 @@ TEST(MPSCRingBufferTest, DequeueClearsReadySeqAndAdvancesHead)
     EXPECT_EQ(ring->dequeue(out.data(), out.size()), 0u);
 }
 
+// 问题#9：dequeue 直接信任共享内存 Entry 头的 body_length，仅按 buffer_cap 截断，
+// 未按本环 max_msg_size_ 钳制。异常 body_length 会使 memcpy 越过 entry_stride_ 越界读。
+// 修复后：超限 Entry 被识别为损坏并跳过（返回 0 且推进 head），不越界、不卡死。
+TEST(MPSCRingBufferTest, DequeueSkipsCorruptEntryWithOversizedBodyLength)
+{
+    constexpr uint32_t capacity = 4;
+    constexpr uint32_t maxMsgSize = 128;
+    auto mem = AllocRingMemory(capacity, maxMsgSize);
+    ASSERT_NE(mem, nullptr);
+    auto *ring = ConstructRing(mem.get(), capacity, maxMsgSize);
+
+    // buffer_cap 远大于单 entry 数据区，模拟真实分发缓冲区（max_msg_size_global_）
+    std::vector<char> out(4096);
+
+    // 场景1：body_length 为回绕级超大值（0xFFFFFFFF），修复前 real_len 截断/越界读
+    message_header_t wrapCorrupt = MakeHeader(0xFFFFFFFFu);
+    WriteReadyEntry(ring, 0, wrapCorrupt, nullptr, 0);
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), 0u);
+    EXPECT_EQ(ring->head_.load(std::memory_order_acquire), 1u); // 已跳过，head 推进
+
+    // 场景2：body_length 超过 max_msg_size_ 但不回绕（修复前按 buffer_cap 越界读脏数据）
+    message_header_t bigCorrupt = MakeHeader(maxMsgSize * 2);
+    WriteReadyEntry(ring, 1, bigCorrupt, nullptr, 0);
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), 0u);
+    EXPECT_EQ(ring->head_.load(std::memory_order_acquire), 2u);
+
+    // 场景3：合法消息仍能正常出队（回归，确认钳制不误伤正常路径）
+    const char body[] = "ok";
+    message_header_t good = MakeHeader(sizeof(body));
+    WriteReadyEntry(ring, 2, good, body, sizeof(body));
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), sizeof(message_header_t) + sizeof(body));
+    EXPECT_EQ(ring->head_.load(std::memory_order_acquire), 3u);
+}
+
+// 问题#9 边界：body_length 恰好使 real_len == max_msg_size_ 时应视为合法并正常拷贝。
+TEST(MPSCRingBufferTest, DequeueAcceptsBodyLengthAtMaxMsgSizeBoundary)
+{
+    constexpr uint32_t capacity = 4;
+    constexpr uint32_t maxMsgSize = sizeof(message_header_t) + 16;
+    auto mem = AllocRingMemory(capacity, maxMsgSize);
+    ASSERT_NE(mem, nullptr);
+    auto *ring = ConstructRing(mem.get(), capacity, maxMsgSize);
+
+    // real_len = sizeof(header) + body_length == maxMsgSize，处于合法上界
+    const uint32_t bodyLen = maxMsgSize - sizeof(message_header_t);
+    char body[16] = "boundary";
+    message_header_t hdr = MakeHeader(bodyLen);
+    WriteReadyEntry(ring, 0, hdr, body, bodyLen);
+
+    std::vector<char> out(maxMsgSize);
+    EXPECT_EQ(ring->dequeue(out.data(), out.size()), maxMsgSize);
+    EXPECT_EQ(ring->head_.load(std::memory_order_acquire), 1u);
+}
+
 } // namespace ut
 } // namespace ub_comm_queue
