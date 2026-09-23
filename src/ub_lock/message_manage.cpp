@@ -148,6 +148,11 @@ ub_lock_result_t DistributedLock::notify_waiters(ub_waiter_t &waiter, const ub_l
 ub_lock_result_t DistributedLock::notify_unlock(const ub_location_t &location, uint8_t node_id,
                                                 const local_msg_body_t &msg_body)
 {
+    if (__builtin_expect(g_transport == nullptr, 0)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "notify_unlock rejected: transport=null src=%u dest=%u mode=%d lock=%p", node_id,
+                   location.node_id, msg_body.mode, msg_body.addr);
+        return UB_LOCK_ERROR;
+    }
     MessagePtr msg(create_message(location, node_id, msg_body));
     if (!msg) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Failed to create message");

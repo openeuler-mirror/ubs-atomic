@@ -223,6 +223,35 @@ TEST_F(MessageManageTest, MessageProcessReleaseTriggersDelayUnlock)
     delete local_lock;
 }
 
+TEST_F(MessageManageTest, NotifyUnlockWithoutTransportDoesNotCreateOrSend)
+{
+    std::unique_ptr<UBShmTransport> transport(g_transport);
+    g_transport = nullptr;
+    MOCKER_CPP(&DistributedLock::create_message,
+               message_t * (*)(const ub_location_t &, uint8_t, const local_msg_body_t &))
+        .expects(never())
+        .will(returnValue(static_cast<message_t *>(nullptr)));
+    MOCKER_CPP(&UBShmTransport::send, int (*)(const message_t *)).expects(never());
+    const local_msg_body_t body{0, shm_, UB_RELEASE, UB_LOCK_X};
+    const ub_location_t dest{11, 3};
+    EXPECT_NO_THROW(EXPECT_EQ(lock_->notify_unlock(dest, 1, body), UB_LOCK_ERROR));
+    g_transport = transport.release();
+}
+
+TEST_F(MessageManageTest, NotifyUnlockValidTransportSendsOnce)
+{
+    MOCKER_CPP(&UBShmTransport::send, int (*)(const message_t *)).expects(once()).will(returnValue(0));
+    const local_msg_body_t body{0, shm_, UB_RELEASE, UB_LOCK_S};
+    EXPECT_EQ(lock_->notify_unlock(ub_location_t{11, 3}, 1, body), UB_LOCK_SUCCESS);
+}
+
+TEST_F(MessageManageTest, NotifyUnlockValidTransportRetriesFiveTimes)
+{
+    MOCKER_CPP(&UBShmTransport::send, int (*)(const message_t *)).expects(exactly(5)).will(returnValue(-1));
+    const local_msg_body_t body{0, shm_, UB_RELEASE, UB_LOCK_SX};
+    EXPECT_EQ(lock_->notify_unlock(ub_location_t{11, 3}, 1, body), UB_LOCK_ERROR);
+}
+
 TEST_F(MessageManageTest, NotifyUnlockTest)
 {
     local_msg_body_t msg_body{};
