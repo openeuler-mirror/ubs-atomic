@@ -203,8 +203,7 @@ bool WaitUntil(std::chrono::milliseconds timeout, const std::function<bool()> &p
 
 uint64_t TestSteadyUs()
 {
-    struct timespec ts {
-    };
+    struct timespec ts {};
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
@@ -294,6 +293,35 @@ TEST(UbCommQueueApiTest, InitDeinitAndWrapperMethodsUseTransport)
     EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
     EXPECT_EQ(handle, nullptr);
     EXPECT_EQ(g_transport, nullptr);
+}
+
+// 问题#10：build_node_mapping 仅校验节点数量不校验单个 node_id 取值范围，node_id 为 uint8_t（可到 255）。
+// ring_map 中出现 node_id >= MAX_NODES_LIMIT(16) 时初始化可通过，后续以逻辑 node_id 直接下标
+// 访问 ring_caches_[node_id][prio]（数组仅 [16][8]）越界写相邻内存。修复后 init 直接拒绝。
+TEST(UbCommQueueApiTest, InitRejectsNodeIdExceedingMaxNodesLimit)
+{
+    g_transport = nullptr;
+    ApiEnv env(200); // node_id=200，远超 MAX_NODES_LIMIT
+    ub_shm_comm_t handle = nullptr;
+    EXPECT_NE(ub_comm_queue_init(&handle, env.InitArea(), env.RingMap(), env.Conf()), UB_COMM_OK);
+    EXPECT_EQ(handle, nullptr);
+    g_transport = nullptr;
+}
+
+// 问题#10 纵深防御：try_populate_cache 直接以 node_id 下标访问 ring_caches_，修复前仅校验 prio。
+// 修复后对 node_id >= MAX_NODES_LIMIT 返回 -EINVAL，杜绝越界访问。
+TEST(UbCommQueueApiTest, TryPopulateCacheRejectsOutOfRangeNodeId)
+{
+    g_transport = nullptr;
+    ApiEnv env(0);
+    ub_shm_comm_t handle = nullptr;
+    ASSERT_EQ(ub_comm_queue_init(&handle, env.InitArea(), env.RingMap(), env.Conf()), UB_COMM_OK);
+    auto *transport = static_cast<UBShmTransport *>(handle);
+    EXPECT_EQ(transport->try_populate_cache(MAX_NODES_LIMIT, 0), -EINVAL);     // 边界：恰好越界
+    EXPECT_EQ(transport->try_populate_cache(200, 0), -EINVAL);                 // 远超上界
+    EXPECT_EQ(transport->try_populate_cache(0, MAX_PRIORITY_LEVELS), -EINVAL); // prio 越界仍被拒
+    EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
+    g_transport = nullptr;
 }
 
 TEST(UbCommQueueApiTest, SecondInitIsMarkedNonLockAndBadConfigReturnsError)
