@@ -522,6 +522,14 @@ ub_lock_result_t LocalLock::unlock_sx(bool allow_recursive, int32_t tid)
         return UB_LOCK_ERROR;
     }
 
+    const uint64_t state = lock_word.load(std::memory_order_acquire);
+    if (__builtin_expect((state & LOCAL_LOCK_SX_FLAG) == 0, 0)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "SX unlock rejected: missing flag, lock=%p tid=%d state=0x%llx recursive=%u",
+                   static_cast<void *>(ub_lock_ptr_), tid, static_cast<unsigned long long>(state),
+                   sx_recursive_.load(std::memory_order_acquire));
+        return UB_LOCK_ERROR;
+    }
+    // 合法释放仍先清理 owner/递归信息，再发布 SX 位，避免覆盖后继持有者。
     if (allow_recursive) {
         uint32_t old = sx_recursive_.fetch_sub(1, std::memory_order_acq_rel);
         if (old > 1)
