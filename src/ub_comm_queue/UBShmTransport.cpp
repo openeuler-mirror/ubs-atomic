@@ -1184,16 +1184,29 @@ int UBShmTransport::dispatch_internal(const void *data, uint32_t len)
 
         // 异步拷贝
         uint32_t body_len = len - sizeof(message_header_t);
-        std::string body_copy(body_ptr, body_len);
-        auto f = info.func;
-        auto ctx = info.ctx;
-        auto hdr_copy = *hdr;
-        worker_pool_->enqueue([f, ctx, hdr_copy, body = std::move(body_copy)]() mutable {
-            message_t m;
-            m.header = hdr_copy;
-            m.body = const_cast<char *>(body.data());
-            f(&m, ctx);
-        });
+        // 消息已出队，提交失败时记录并丢弃；不重试，避免阻塞分发线程。
+        try {
+            std::string body_copy(body_ptr, body_len);
+            auto f = info.func;
+            auto ctx = info.ctx;
+            auto hdr_copy = *hdr;
+            worker_pool_->enqueue([f, ctx, hdr_copy, body = std::move(body_copy)]() mutable {
+                message_t m;
+                m.header = hdr_copy;
+                m.body = const_cast<char *>(body.data());
+                f(&m, ctx);
+            });
+        } catch (const std::bad_alloc &) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR,
+                       "Async dispatch dropped: allocation failed, node=%u src=%u type=%u body_length=%u",
+                       conf_.current_node_id, hdr->src_node_id, hdr->msg_type, body_len);
+            return -ENOMEM;
+        } catch (const std::exception &e) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR,
+                       "Async dispatch dropped: enqueue failed, node=%u src=%u type=%u body_length=%u: %s",
+                       conf_.current_node_id, hdr->src_node_id, hdr->msg_type, body_len, e.what());
+            return -EPIPE;
+        }
     }
     return 0;
 }
