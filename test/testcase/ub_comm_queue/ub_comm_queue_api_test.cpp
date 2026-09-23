@@ -252,7 +252,8 @@ bool WaitUntil(std::chrono::milliseconds timeout, const std::function<bool()> &p
 
 uint64_t TestSteadyUs()
 {
-    struct timespec ts {};
+    struct timespec ts {
+    };
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000ULL;
 }
@@ -587,6 +588,58 @@ TEST(UbCommQueueApiTest, UBCQ_IF_RCV_EER_002_SetHeartbeatConfigWithoutQuery)
     EXPECT_EQ(effective.timeout_ms, 10u);
 
     EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
+}
+
+// 问题#13：拒绝超时窗口不足及乘二溢出边界，失败不得修改本地配置或公告牌。
+TEST(UbCommQueueApiTest, HeartbeatRejectsInvalidConfigWithoutSideEffects)
+{
+    Billboard board{};
+    UBShmTransport transport;
+    transport.init_region_ptr_ = reinterpret_cast<char *>(&board);
+    transport.node_id_to_idx_.emplace(0, 0);
+    ub_shm_comm_t handle = &transport;
+    const ub_comm_queue_heartbeat_config_t baseline{10, 5, 20};
+    ASSERT_EQ(ub_comm_queue_config_heartbeat(&handle, &baseline, nullptr), UB_COMM_OK);
+    const ub_comm_queue_heartbeat_config_t invalid[] = {
+        {25, 10, 19}, {25, UINT32_MAX / 2 + 1, UINT32_MAX}, {25, UINT32_MAX, UINT32_MAX}, {0, 5, 20}, {25, 0, 20},
+        {25, 5, 0},
+    };
+    for (const auto &request : invalid) {
+        SCOPED_TRACE(::testing::Message() << "heartbeat=" << request.heartbeat_interval_ms << " check="
+                                          << request.check_interval_ms << " timeout=" << request.timeout_ms);
+        ub_comm_queue_heartbeat_config_t effective{7, 8, 9};
+        EXPECT_EQ(ub_comm_queue_config_heartbeat(&handle, &request, &effective), -EINVAL);
+        EXPECT_EQ(effective.heartbeat_interval_ms, 7u);
+        EXPECT_EQ(effective.check_interval_ms, 8u);
+        EXPECT_EQ(effective.timeout_ms, 9u);
+        EXPECT_EQ(ub_comm_queue_config_heartbeat(&handle, nullptr, &effective), UB_COMM_OK);
+        EXPECT_EQ(effective.heartbeat_interval_ms, baseline.heartbeat_interval_ms);
+        EXPECT_EQ(effective.check_interval_ms, baseline.check_interval_ms);
+        EXPECT_EQ(effective.timeout_ms, baseline.timeout_ms);
+        EXPECT_EQ(board.nodes[0].heartbeat_interval_ms.load(std::memory_order_acquire), baseline.heartbeat_interval_ms);
+    }
+}
+
+TEST(UbCommQueueApiTest, HeartbeatAcceptsTimeoutBoundaryAndLargeValues)
+{
+    // 不启动后台线程，避免极大测试间隔造成析构等待。
+    UBShmTransport transport;
+    ub_shm_comm_t handle = &transport;
+    const ub_comm_queue_heartbeat_config_t valid[] = {
+        {1, 1, 2},
+        {10, 5, 10},
+        {10, 5, 11},
+        {UINT32_MAX, UINT32_MAX / 2, UINT32_MAX},
+    };
+    for (const auto &request : valid) {
+        ub_comm_queue_heartbeat_config_t effective{};
+        EXPECT_EQ(ub_comm_queue_config_heartbeat(&handle, &request, &effective), UB_COMM_OK);
+        EXPECT_EQ(effective.heartbeat_interval_ms, request.heartbeat_interval_ms);
+        EXPECT_EQ(effective.check_interval_ms, request.check_interval_ms);
+        EXPECT_EQ(effective.timeout_ms, request.timeout_ms);
+        EXPECT_EQ(transport.heartbeat_timeout_us_.load(std::memory_order_acquire),
+                  static_cast<uint64_t>(request.timeout_ms) * 1000ULL);
+    }
 }
 
 TEST(UbCommQueueApiTest, HeartbeatMonitorUsesPeerDeclaredIntervalBeforeTimingOut)

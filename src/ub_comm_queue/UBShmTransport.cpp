@@ -1300,7 +1300,14 @@ int UBShmTransport::config_heartbeat(const ub_comm_queue_heartbeat_config_t *req
         return -EINVAL;
     }
     if (request != nullptr) {
-        if (request->heartbeat_interval_ms == 0 || request->check_interval_ms == 0 || request->timeout_ms == 0) {
+        // 配置入口校验，不增加心跳轮询开销；先提升为 64 位，避免乘二溢出后绕过校验。
+        if (request->heartbeat_interval_ms == 0 || request->check_interval_ms == 0 || request->timeout_ms == 0 ||
+            static_cast<uint64_t>(request->timeout_ms) < 2ULL * request->check_interval_ms) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR,
+                       "Invalid heartbeat config: node=%u heartbeat_interval_ms=%u check_interval_ms=%u timeout_ms=%u; "
+                       "require nonzero values and timeout_ms >= 2 * check_interval_ms",
+                       conf_.current_node_id, request->heartbeat_interval_ms, request->check_interval_ms,
+                       request->timeout_ms);
             return -EINVAL;
         }
 
