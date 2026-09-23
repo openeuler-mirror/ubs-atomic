@@ -828,6 +828,15 @@ ub_lock_result_t DistributedLock::unlock_s(const ub_lock_policy_t &policy, const
         return UB_LOCK_ERROR;
     }
     LocalLock *local_lock = ll_sp.get();
+    // 只读校验既有分桶状态；全局释放完成前保留本地读锁，避免提前放行本地 X 等待者。
+    const uint64_t local_state = local_lock->lock_word.load(std::memory_order_acquire);
+    const uint16_t lane = local_lock_lane_value(local_state, local_lock_lane_for_tid(location.tid));
+    if (__builtin_expect((lane & LOCAL_LOCK_READER_SENTINEL) != 0 || (lane & LOCAL_LOCK_READER_COUNT_MASK) == 0, 0)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "S unlock rejected: invalid reader lane, lock=%p node=%u tid=%d state=0x%llx",
+                   static_cast<void *>(rw_lock_shm_), location.node_id, location.tid,
+                   static_cast<unsigned long long>(local_state));
+        return UB_LOCK_ERROR;
+    }
     ub_lock_result_t ret;
     int32_t old_ref = local_lock->global_read_ref_count_.fetch_sub(1, std::memory_order_acq_rel);
     if (old_ref > 1) {
