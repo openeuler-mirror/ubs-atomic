@@ -1091,7 +1091,14 @@ bool UBShmTransport::query_inited(const uint8_t node_id)
 void UBShmTransport::run_dispatcher_loop()
 {
     if (cpu_id_ != -1) {
-        pin_this_thread_to_cpu(cpu_id_);
+        // pin_this_thread_to_cpu 失败时抛 std::runtime_error；异常若逃逸出线程函数会触发
+        // std::terminate 使整个进程崩溃。绑核仅为性能优化，失败时降级为告警并继续不绑核运行。
+        try {
+            pin_this_thread_to_cpu(cpu_id_);
+        } catch (const std::exception &e) {
+            ATOMIC_LOG(LOG_LEVEL_WARN, "Dispatcher failed to pin to cpu %d: %s, continue without pinning", cpu_id_,
+                       e.what());
+        }
     }
     std::vector<char> buffer(max_msg_size_global_);
     while (!stop_flag_.load(std::memory_order_relaxed)) {

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "mockcpp/mokc.h"
 
 #define private public
 #include "UBShmTransport.h"
@@ -21,6 +22,8 @@ namespace ub_comm_queue {
 namespace ut {
 namespace {
 static constexpr uint32_t DEFAULT_NODE_NUM = 2;
+// mockcpp 不支持 noexcept 函数类型，转为同签名的普通函数指针进行打桩。
+using SetAffinityFunction = int (*)(pthread_t, size_t, const cpu_set_t *);
 void DummyCallback(const message_t *, void *) {}
 std::atomic<uint32_t> g_async_callback_count{0};
 std::atomic<uint32_t> g_log_callback_count{0};
@@ -322,6 +325,49 @@ TEST(UbCommQueueApiTest, TryPopulateCacheRejectsOutOfRangeNodeId)
     EXPECT_EQ(transport->try_populate_cache(0, MAX_PRIORITY_LEVELS), -EINVAL); // prio 越界仍被拒
     EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
     g_transport = nullptr;
+}
+
+class UbCommQueueFaultTest : public ::testing::Test {
+protected:
+    void TearDown() override
+    {
+        GlobalMockObject::verify();
+    }
+};
+
+// 问题#11：模拟绑核失败，验证真实分发线程仍能接收并处理后续消息。
+TEST_F(UbCommQueueFaultTest, DispatcherContinuesAfterPinFailure)
+{
+    MOCKER(static_cast<SetAffinityFunction>(pthread_setaffinity_np)).expects(once()).will(returnValue(EINVAL));
+    g_async_callback_count.store(0, std::memory_order_release);
+    ApiEnv env(0);
+    env.Conf()->cpu_id = 0;
+    UBShmTransport transport;
+    ASSERT_EQ(transport.init(env.InitArea(), env.RingMap(), env.Conf()), UB_COMM_OK);
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_SYNC, AsyncCallback, nullptr), UB_COMM_OK);
+
+    message_t msg = MakeMessage(8);
+    ASSERT_EQ(transport.send(&msg), UB_COMM_OK);
+    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(300),
+                          []() { return g_async_callback_count.load(std::memory_order_acquire) == 1; }));
+}
+
+TEST_F(UbCommQueueFaultTest, DispatcherSkipsPinningWhenDisabled)
+{
+    MOCKER(static_cast<SetAffinityFunction>(pthread_setaffinity_np)).expects(never());
+    UBShmTransport transport;
+    transport.cpu_id_ = -1;
+    transport.stop_flag_.store(true, std::memory_order_release);
+    EXPECT_NO_THROW(transport.run_dispatcher_loop());
+}
+
+TEST_F(UbCommQueueFaultTest, DispatcherAcceptsSuccessfulPinning)
+{
+    MOCKER(static_cast<SetAffinityFunction>(pthread_setaffinity_np)).expects(once()).will(returnValue(0));
+    UBShmTransport transport;
+    transport.cpu_id_ = 0;
+    transport.stop_flag_.store(true, std::memory_order_release);
+    EXPECT_NO_THROW(transport.run_dispatcher_loop());
 }
 
 TEST(UbCommQueueApiTest, SecondInitIsMarkedNonLockAndBadConfigReturnsError)
