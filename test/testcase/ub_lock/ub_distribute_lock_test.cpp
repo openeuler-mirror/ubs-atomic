@@ -256,6 +256,105 @@ TEST_F(UbDistributedLockTest, UnlockSDetectsOverRelease)
     EXPECT_EQ(lock_->unlock_s(policy, loc), UB_LOCK_ERROR);
 }
 
+TEST_F(UbDistributedLockTest, UnlockSInvalidLanePreservesSharedState)
+{
+    auto ll = std::make_shared<LocalLock>(shm_);
+    register_local_lock(shm_, ll);
+    const ub_location_t owner{4, 3};
+    const ub_location_t second{5, 3};
+    const ub_location_t invalid{6, 3};
+    const ub_lock_policy_t immediate{100, false, false};
+    for (int readers : {1, 2}) {
+        for (bool delay : {false, true}) {
+            for (bool waiting : {false, true}) {
+                ll->init_();
+                lock_->create_wait_queue();
+                shm_->lock_word.store(X_LOCK_DECR);
+                shm_->shared_owner_bitmap.store(0);
+                shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER);
+                ASSERT_EQ(lock_->lock_s(immediate, owner), UB_LOCK_SUCCESS);
+                if (readers == 2) {
+                    ASSERT_EQ(lock_->lock_s(immediate, second), UB_LOCK_SUCCESS);
+                }
+                uint32_t ticket = 0;
+                if (waiting) {
+                    ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_X, invalid, ticket), UB_LOCK_SUCCESS);
+                }
+                const uint64_t local_state = ll->lock_word.load();
+                const ub_lock_policy_t policy{100, delay, false};
+                EXPECT_EQ(lock_->unlock_s(policy, invalid), UB_LOCK_ERROR);
+                EXPECT_EQ(ll->lock_word.load(), local_state);
+                EXPECT_EQ(ll->global_read_ref_count_.load(), readers);
+                EXPECT_EQ(ll->global_state_.load(), LocalLock::GLOBAL_HELD);
+                EXPECT_TRUE(ll->hold_global.load());
+                EXPECT_EQ(ll->local_is_reserve_lock.load(), UB_LOCK_I);
+                EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR - 1);
+                EXPECT_EQ(shm_->shared_owner_bitmap.load(), 1u << owner.node_id);
+                EXPECT_EQ(shm_->reserve_lock_owner.load(), LOCK_INVALID_OWNER);
+                EXPECT_EQ(shm_->waiting_count.load(), waiting ? 1u : 0u);
+                if (waiting) {
+                    EXPECT_EQ(shm_->wait_queue[ticket].seq.load(), UB_WAIT_WAITING);
+                    lock_->clean_timeout_waiter(ticket);
+                }
+                if (readers == 2) {
+                    EXPECT_EQ(lock_->unlock_s(immediate, second), UB_LOCK_SUCCESS);
+                    EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR - 1);
+                }
+                EXPECT_EQ(lock_->unlock_s(policy, owner), UB_LOCK_SUCCESS);
+                EXPECT_EQ(ll->global_read_ref_count_.load(), 0);
+                EXPECT_EQ(lock_->unlock_s(policy, owner), UB_LOCK_ERROR);
+                EXPECT_EQ(ll->global_read_ref_count_.load(), 0);
+                if (delay) {
+                    EXPECT_EQ(shm_->reserve_lock_owner.load(), make_global_owner(owner.node_id, owner.tid));
+                    EXPECT_EQ(ll->local_is_reserve_lock.exchange(UB_LOCK_I), UB_LOCK_S);
+                    EXPECT_EQ(lock_->delay_unlock(UB_LOCK_S, owner.node_id), UB_LOCK_SUCCESS);
+                }
+                EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR);
+                EXPECT_EQ(shm_->shared_owner_bitmap.load(), 0u);
+            }
+        }
+    }
+}
+
+TEST_F(UbDistributedLockTest, UnlockSSentinelPreservesSharedState)
+{
+    auto ll = std::make_shared<LocalLock>(shm_);
+    register_local_lock(shm_, ll);
+    const ub_location_t loc{4, 3};
+    const uint64_t state = LOCAL_LOCK_X_STATE | LocalReaderStateForTid(loc.tid);
+    const ub_lock_policy_t policy{100, true, false};
+    for (int refs : {1, 2}) {
+        ll->lock_word.store(state);
+        ll->global_read_ref_count_.store(refs);
+        shm_->lock_word.store(X_LOCK_DECR - 1);
+        shm_->shared_owner_bitmap.store(1u << loc.node_id);
+        shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER);
+        EXPECT_EQ(lock_->unlock_s(policy, loc), UB_LOCK_ERROR);
+        EXPECT_EQ(ll->lock_word.load(), state);
+        EXPECT_EQ(ll->global_read_ref_count_.load(), refs);
+        EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR - 1);
+        EXPECT_EQ(shm_->shared_owner_bitmap.load(), 1u << loc.node_id);
+        EXPECT_EQ(shm_->reserve_lock_owner.load(), LOCK_INVALID_OWNER);
+    }
+}
+
+TEST_F(UbDistributedLockTest, UnlockSNonpositiveReferencePreservesLocalLane)
+{
+    auto ll = std::make_shared<LocalLock>(shm_);
+    register_local_lock(shm_, ll);
+    const ub_location_t loc{4, 3};
+    const ub_lock_policy_t policy{100, false, false};
+    for (int refs : {0, -1}) {
+        ll->lock_word.store(LocalReaderStateForTid(loc.tid));
+        ll->global_read_ref_count_.store(refs);
+        shm_->lock_word.store(X_LOCK_DECR - 1);
+        EXPECT_EQ(lock_->unlock_s(policy, loc), UB_LOCK_ERROR);
+        EXPECT_EQ(ll->global_read_ref_count_.load(), refs);
+        EXPECT_EQ(ll->lock_word.load(), LocalReaderStateForTid(loc.tid));
+        EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR - 1);
+    }
+}
+
 TEST_F(UbDistributedLockTest, UnlockSWakesOneWaiterWhenLastReaderReleases)
 {
     auto ll_sp = std::make_shared<LocalLock>(shm_);
