@@ -7,11 +7,14 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 #include "gtest/gtest.h"
 #include "mockcpp/mokc.h"
+#include "ub_atomic_log_print.h"
 
 #define private public
 #include "inner_distribute_lock.h"
@@ -400,6 +403,43 @@ TEST_F(MutexLockTest, LockTimeoutOnContendedLock)
 
     EXPECT_EQ(lock_->lock(kMinTimeoutMs, loc2), UB_LOCK_TIMEOUT);
     EXPECT_EQ(lock_->unlock(loc1), UB_LOCK_SUCCESS);
+}
+
+namespace {
+std::string mutex_timeout_log;
+
+int CaptureMutexTimeout(int, const char *, const char *, uint32_t, const char *message)
+{
+    if (message != nullptr && std::strstr(message, "UB mutex lock timeout:") != nullptr) {
+        mutex_timeout_log = message;
+    }
+    return 0;
+}
+} // namespace
+
+TEST_F(MutexLockTest, TimeoutLogDecodesOwnerNodeIndependentlyOfTid)
+{
+    const auto saved_logger = g_logger_func;
+    const int saved_level = get_log_level_threshold();
+    register_print_func(CaptureMutexTimeout);
+    set_log_level_threshold(LOG_LEVEL_ERROR);
+    lock_->lock_create();
+    for (uint8_t node : {0, UB_MAX_NODES - 1}) {
+        for (int32_t tid : {1, 0x40000001, std::numeric_limits<int32_t>::max()}) {
+            const ub_location_t owner = make_location(node, tid);
+            const ub_location_t waiter = make_location(1, 2);
+            EXPECT_EQ(lock_->lock(kDefaultLockTimeoutMs, owner), UB_LOCK_SUCCESS);
+            mutex_timeout_log.clear();
+            EXPECT_EQ(lock_->lock(kMinTimeoutMs, waiter), UB_LOCK_TIMEOUT);
+            const std::string expected =
+                "global[owner=node=" + std::to_string(node) + ",tid=" + std::to_string(tid) + " waiters=";
+            EXPECT_NE(mutex_timeout_log.find(expected), std::string::npos) << mutex_timeout_log;
+            EXPECT_EQ(shm_->lock_owner.load(), make_global_owner(node, tid));
+            EXPECT_EQ(lock_->unlock(owner), UB_LOCK_SUCCESS);
+        }
+    }
+    register_print_func(saved_logger);
+    set_log_level_threshold(saved_level);
 }
 
 TEST_F(MutexLockTest, LockTimeoutUsesDefaultWhenZero)

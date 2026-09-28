@@ -228,6 +228,89 @@ TEST_F(LocalLockTest, UnlockSxReleasesOrKeepsOnRecursive)
     EXPECT_EQ(lock_->lock_sx_owner.load(), 0u);
 }
 
+TEST_F(LocalLockTest, UnlockSxMissingFlagPreservesOwnerRecursionAndWaiters)
+{
+    for (bool recursive : {false, true}) {
+        for (uint32_t count : {0u, 1u, 3u}) {
+            for (uint16_t readers : {0, 2}) {
+                lock_->init_();
+                const uint64_t state = LocalReaderStateForTid(4, readers);
+                lock_->lock_word.store(state);
+                lock_->lock_sx_owner.store(11);
+                lock_->sx_recursive_.store(count);
+                uint32_t ticket = 0;
+                ASSERT_EQ(lock_->enqueue_waiter(UB_LOCK_X, 22, ticket), UB_LOCK_SUCCESS);
+                EXPECT_EQ(lock_->unlock_sx(recursive, 11), UB_LOCK_ERROR);
+                EXPECT_EQ(lock_->lock_word.load(), state);
+                EXPECT_EQ(lock_->lock_sx_owner.load(), 11);
+                EXPECT_EQ(lock_->sx_recursive_.load(), count);
+                EXPECT_EQ(lock_->waiting_count.load(), 1u);
+                EXPECT_EQ(lock_->q[ticket].seq.load(), UB_WAIT_WAITING);
+                EXPECT_EQ(lock_->q_head.v.load(), ticket);
+            }
+        }
+    }
+}
+
+TEST_F(LocalLockTest, UnlockSxRecursiveReleasePreservesCoexistingReaders)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    for (bool recursive : {false, true}) {
+        ASSERT_EQ(lock_->lock_s(4, deadline), UB_LOCK_SUCCESS);
+        ASSERT_EQ(lock_->lock_sx(recursive, 11, deadline), UB_LOCK_SUCCESS);
+        if (recursive) {
+            ASSERT_EQ(lock_->lock_sx(true, 11, deadline), UB_LOCK_SUCCESS);
+            ASSERT_EQ(lock_->lock_sx(true, 11, deadline), UB_LOCK_SUCCESS);
+            for (uint32_t count : {2u, 1u}) {
+                EXPECT_EQ(lock_->unlock_sx(true, 11), UB_LOCK_SUCCESS);
+                EXPECT_EQ(lock_->sx_recursive_.load(), count);
+                EXPECT_EQ(lock_->lock_sx_owner.load(), 11);
+                EXPECT_EQ(lock_->lock_word.load(), LOCAL_LOCK_SX_FLAG | LocalReaderStateForTid(4));
+            }
+        }
+        EXPECT_EQ(lock_->unlock_sx(recursive, 11), UB_LOCK_SUCCESS);
+        EXPECT_EQ(lock_->sx_recursive_.load(), 0u);
+        EXPECT_EQ(lock_->lock_sx_owner.load(), 0);
+        EXPECT_EQ(lock_->lock_word.load(), LocalReaderStateForTid(4));
+        EXPECT_EQ(lock_->unlock_s(4), UB_LOCK_SUCCESS);
+        EXPECT_EQ(lock_->lock_word.load(), 0u);
+    }
+}
+
+namespace {
+LocalLock *sx_handoff_lock = nullptr;
+
+uint16_t ReleaseSxAndAcquireNextOwner(LocalLockStateWord *word, uint32_t lane, uint16_t mask, std::memory_order order)
+{
+    EXPECT_EQ(word, &sx_handoff_lock->lock_word);
+    EXPECT_EQ(sx_handoff_lock->lock_sx_owner.load(), 0);
+    EXPECT_EQ(sx_handoff_lock->sx_recursive_.load(), 0u);
+    const uint16_t old = __atomic_fetch_and(word->lane_ptr(lane), mask, word->atomic_order(order));
+    // 在释放位之后、旧 unlock 返回之前确定性交接，检测旧线程是否会覆盖新 owner。
+    EXPECT_EQ(sx_handoff_lock->lock_sx(false, 22, std::chrono::steady_clock::now() + std::chrono::seconds(1)),
+              UB_LOCK_SUCCESS);
+    return old;
+}
+} // namespace
+
+TEST_F(LocalLockTest, UnlockSxPublishesBeforeNextOwnerHandoff)
+{
+    ASSERT_EQ(lock_->lock_sx(false, 11, std::chrono::steady_clock::now() + std::chrono::seconds(1)), UB_LOCK_SUCCESS);
+    sx_handoff_lock = lock_;
+    MOCKCPP_NS::mockAPI("LocalLockStateWord::fetch_and_lane",
+                        reinterpret_cast<uint16_t (*)(LocalLockStateWord *, uint32_t, uint16_t, std::memory_order)>(
+                            &LocalLockStateWord::fetch_and_lane))
+        .expects(once())
+        .will(invoke(ReleaseSxAndAcquireNextOwner));
+    EXPECT_EQ(lock_->unlock_sx(false, 11), UB_LOCK_SUCCESS);
+    EXPECT_EQ(lock_->lock_word.load(), LOCAL_LOCK_SX_FLAG);
+    EXPECT_EQ(lock_->lock_sx_owner.load(), 22);
+    EXPECT_EQ(lock_->sx_recursive_.load(), 1u);
+    GlobalMockObject::verify();
+    sx_handoff_lock = nullptr;
+    EXPECT_EQ(lock_->unlock_sx(false, 22), UB_LOCK_SUCCESS);
+}
+
 TEST_F(LocalLockTest, LockSUnlockSUpdatesCounters)
 {
     int32_t tid = ub_get_tid_i32();

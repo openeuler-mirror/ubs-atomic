@@ -371,8 +371,17 @@ int UBShmTransport::build_node_mapping(const ub_ring_region_map_t *ring_map)
 {
     std::set<uint32_t> all_ids;
     for (uint32_t i = 0; i < ring_map->count; ++i) {
-        all_ids.insert(ring_map->entries[i].node_id);
-        ATOMIC_LOG(LOG_LEVEL_DEBUG, "Add Node ID: %u", ring_map->entries[i].node_id);
+        // node_id 为 uint8_t（可到 255），但 ring_caches_/remote_lookup_table_ 等内部数组仅
+        // [MAX_NODES_LIMIT][MAX_PRIORITY_LEVELS]。必须在建映射时拒绝越界 node_id，否则非法 id
+        // 会进入 node_id_to_idx_/idx_to_node_id_，后续以逻辑 node_id 直接下标访问将越界写相邻内存。
+        const uint32_t nid = ring_map->entries[i].node_id;
+        if (nid >= MAX_NODES_LIMIT) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid node_id %u at ring map index %u, must be < %u", nid, i,
+                       MAX_NODES_LIMIT);
+            return -EINVAL;
+        }
+        all_ids.insert(nid);
+        ATOMIC_LOG(LOG_LEVEL_DEBUG, "Add Node ID: %u", nid);
     }
     // 限制检查
     if (all_ids.size() > MAX_NODES_LIMIT || all_ids.size() != conf_.max_nodes) {
@@ -1082,7 +1091,14 @@ bool UBShmTransport::query_inited(const uint8_t node_id)
 void UBShmTransport::run_dispatcher_loop()
 {
     if (cpu_id_ != -1) {
-        pin_this_thread_to_cpu(cpu_id_);
+        // pin_this_thread_to_cpu 失败时抛 std::runtime_error；异常若逃逸出线程函数会触发
+        // std::terminate 使整个进程崩溃。绑核仅为性能优化，失败时降级为告警并继续不绑核运行。
+        try {
+            pin_this_thread_to_cpu(cpu_id_);
+        } catch (const std::exception &e) {
+            ATOMIC_LOG(LOG_LEVEL_WARN, "Dispatcher failed to pin to cpu %d: %s, continue without pinning", cpu_id_,
+                       e.what());
+        }
     }
     std::vector<char> buffer(max_msg_size_global_);
     while (!stop_flag_.load(std::memory_order_relaxed)) {
@@ -1168,16 +1184,29 @@ int UBShmTransport::dispatch_internal(const void *data, uint32_t len)
 
         // 异步拷贝
         uint32_t body_len = len - sizeof(message_header_t);
-        std::string body_copy(body_ptr, body_len);
-        auto f = info.func;
-        auto ctx = info.ctx;
-        auto hdr_copy = *hdr;
-        worker_pool_->enqueue([f, ctx, hdr_copy, body = std::move(body_copy)]() mutable {
-            message_t m;
-            m.header = hdr_copy;
-            m.body = const_cast<char *>(body.data());
-            f(&m, ctx);
-        });
+        // 消息已出队，提交失败时记录并丢弃；不重试，避免阻塞分发线程。
+        try {
+            std::string body_copy(body_ptr, body_len);
+            auto f = info.func;
+            auto ctx = info.ctx;
+            auto hdr_copy = *hdr;
+            worker_pool_->enqueue([f, ctx, hdr_copy, body = std::move(body_copy)]() mutable {
+                message_t m;
+                m.header = hdr_copy;
+                m.body = const_cast<char *>(body.data());
+                f(&m, ctx);
+            });
+        } catch (const std::bad_alloc &) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR,
+                       "Async dispatch dropped: allocation failed, node=%u src=%u type=%u body_length=%u",
+                       conf_.current_node_id, hdr->src_node_id, hdr->msg_type, body_len);
+            return -ENOMEM;
+        } catch (const std::exception &e) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR,
+                       "Async dispatch dropped: enqueue failed, node=%u src=%u type=%u body_length=%u: %s",
+                       conf_.current_node_id, hdr->src_node_id, hdr->msg_type, body_len, e.what());
+            return -EPIPE;
+        }
     }
     return 0;
 }
@@ -1271,7 +1300,14 @@ int UBShmTransport::config_heartbeat(const ub_comm_queue_heartbeat_config_t *req
         return -EINVAL;
     }
     if (request != nullptr) {
-        if (request->heartbeat_interval_ms == 0 || request->check_interval_ms == 0 || request->timeout_ms == 0) {
+        // 配置入口校验，不增加心跳轮询开销；先提升为 64 位，避免乘二溢出后绕过校验。
+        if (request->heartbeat_interval_ms == 0 || request->check_interval_ms == 0 || request->timeout_ms == 0 ||
+            static_cast<uint64_t>(request->timeout_ms) < 2ULL * request->check_interval_ms) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR,
+                       "Invalid heartbeat config: node=%u heartbeat_interval_ms=%u check_interval_ms=%u timeout_ms=%u; "
+                       "require nonzero values and timeout_ms >= 2 * check_interval_ms",
+                       conf_.current_node_id, request->heartbeat_interval_ms, request->check_interval_ms,
+                       request->timeout_ms);
             return -EINVAL;
         }
 
@@ -1349,6 +1385,11 @@ int UBShmTransport::set_is_for_lock(bool is_for_lock)
 int UBShmTransport::try_populate_cache(uint32_t node_id, uint32_t prio)
 {
     ATOMIC_LOG(LOG_LEVEL_DEBUG, "Trying to populate cache for node %d, priority %d", node_id, prio);
+    // 纵深防御：ring_caches_ 仅 [MAX_NODES_LIMIT][MAX_PRIORITY_LEVELS]，node_id/prio 越界会破坏相邻内存。
+    if (node_id >= MAX_NODES_LIMIT) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid node_id %u exceeds MAX_NODES_LIMIT %u", node_id, MAX_NODES_LIMIT);
+        return -EINVAL;
+    }
     if (prio >= MAX_PRIORITY_LEVELS) {
         ATOMIC_LOG(LOG_LEVEL_ERROR, "Invalid priority %u", prio);
         return -EINVAL;

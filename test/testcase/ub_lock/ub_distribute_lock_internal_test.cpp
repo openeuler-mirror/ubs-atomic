@@ -748,6 +748,139 @@ TEST_F(UbDistLockMemberTest, RebuildRejectsMissingOldLocalLock)
     delete old_lock;
 }
 
+TEST_F(UbDistLockMemberTest, RebuildRejectsCreateInProgressAndUnknownState)
+{
+    for (int32_t state : {-2, -3}) {
+        ub_rw_lock_t old_lock{};
+        auto ll = std::make_shared<LocalLock>(&old_lock);
+        register_local_lock(&old_lock, ll);
+        ub_lock_query_result_t entry = MakeEntry(1, UB_LOCK_I, 0, 0, false, UB_LOCK_I);
+        ub_lock_rebuild_info_t info{&entry, 1};
+        shm_->is_inited.store(state);
+        EXPECT_EQ(lock_->rebuild(&old_lock, info, ub_location_t{11, 1}), UB_LOCK_ERROR);
+        EXPECT_EQ(shm_->is_inited.load(), state);
+        EXPECT_EQ(lookup_local_lock(&old_lock), ll);
+        EXPECT_EQ(ll->ub_lock_ptr_, &old_lock);
+        EXPECT_EQ(shm_->node_registry[1], 0u);
+        (void)unregister_local_lock(&old_lock);
+        (void)unregister_local_lock(shm_);
+    }
+}
+
+TEST_F(UbDistLockMemberTest, RebuildBindingFailureRestoresEmpty)
+{
+    ub_rw_lock_t old_lock{};
+    auto ll = std::make_shared<LocalLock>(&old_lock);
+    register_local_lock(&old_lock, ll);
+    ub_lock_query_result_t entry = MakeEntry(1, UB_LOCK_I, 0, 0, false, UB_LOCK_I);
+    ub_lock_rebuild_info_t info{&entry, 1};
+    MOCKER(switch_local_lock_binding).stubs().will(returnValue(std::shared_ptr<LocalLock>{}));
+    EXPECT_EQ(lock_->rebuild(&old_lock, info, ub_location_t{11, 1}), UB_LOCK_ERROR);
+    EXPECT_EQ(shm_->is_inited.load(), 0);
+    EXPECT_EQ(lookup_local_lock(&old_lock), ll);
+    GlobalMockObject::verify();
+    (void)unregister_local_lock(&old_lock);
+}
+
+TEST_F(UbDistLockMemberTest, RebuildBindingExceptionRestoresEmptyAndAllowsRetry)
+{
+    ub_rw_lock_t old_lock{};
+    auto ll = std::make_shared<LocalLock>(&old_lock);
+    register_local_lock(&old_lock, ll);
+    ub_lock_query_result_t entry = MakeEntry(1, UB_LOCK_I, 0, 0, false, UB_LOCK_I);
+    ub_lock_rebuild_info_t info{&entry, 1};
+    MOCKER(switch_local_lock_binding).stubs().will(throws(std::bad_alloc()));
+    EXPECT_NO_THROW(EXPECT_EQ(lock_->rebuild(&old_lock, info, ub_location_t{11, 1}), UB_LOCK_ERROR));
+    EXPECT_EQ(shm_->is_inited.load(), 0);
+    EXPECT_EQ(lookup_local_lock(&old_lock), ll);
+    GlobalMockObject::verify();
+    ASSERT_EQ(shm_->is_inited.load(), 0);
+    EXPECT_EQ(lock_->rebuild(&old_lock, info, ub_location_t{11, 1}), UB_LOCK_SUCCESS);
+    EXPECT_EQ(shm_->is_inited.load(), 1);
+    EXPECT_EQ(lookup_local_lock(shm_), ll);
+    (void)unregister_local_lock(&old_lock);
+}
+
+TEST_F(UbDistLockMemberTest, RebuildDelayedTokenHasNoThreadAndCanBeReleased)
+{
+    for (uint8_t node : {0, 3}) {
+        for (int32_t recovery_tid : {11, 99}) {
+            for (ub_lock_mode_t mode : {UB_LOCK_S, UB_LOCK_SX, UB_LOCK_X}) {
+                ub_rw_lock_t old_lock{};
+                auto ll = std::make_shared<LocalLock>(&old_lock);
+                ll->local_is_reserve_lock.store(mode);
+                register_local_lock(&old_lock, ll);
+                const ub_location_t loc{recovery_tid, node};
+                ub_lock_query_result_t entry = MakeEntry(node, UB_LOCK_I, 0, 0, false, mode);
+                const ub_lock_rebuild_info_t info{&entry, 1};
+                shm_->is_inited.store(0);
+                ASSERT_EQ(lock_->rebuild(&old_lock, info, loc), UB_LOCK_SUCCESS);
+                EXPECT_EQ(shm_->reserve_lock_owner.load(), make_global_owner(node, 0));
+                EXPECT_EQ(shm_->node_registry[node], reinterpret_cast<uintptr_t>(shm_));
+                EXPECT_EQ(shm_->lock_word.load(),
+                          mode == UB_LOCK_X ? 0 : (mode == UB_LOCK_SX ? X_LOCK_HALF_DECR : X_LOCK_DECR - 1));
+                if (mode == UB_LOCK_X) {
+                    EXPECT_EQ(shm_->lock_owner_x.load(), make_global_owner(node, 0));
+                } else if (mode == UB_LOCK_SX) {
+                    EXPECT_EQ(shm_->lock_owner_sx.load(), make_global_owner(node, 0));
+                } else {
+                    EXPECT_EQ(shm_->shared_owner_bitmap.load(), 1u << node);
+                }
+                ub_lock_query_result_t result{};
+                ASSERT_EQ(lock_->query_holder(loc, result), UB_LOCK_SUCCESS);
+                EXPECT_EQ(result.held_mode, UB_LOCK_I);
+                EXPECT_EQ(result.holder_tid, 0);
+                EXPECT_EQ(result.reserve_mode, mode);
+                EXPECT_EQ(lock_->delay_release_local_lock(*ll, UB_LOCK_I, loc), UB_LOCK_SUCCESS);
+                EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR);
+                EXPECT_EQ(shm_->reserve_lock_owner.load(), LOCK_INVALID_OWNER);
+                EXPECT_EQ(shm_->lock_owner_x.load(), LOCK_INVALID_OWNER);
+                EXPECT_EQ(shm_->lock_owner_sx.load(), LOCK_INVALID_OWNER);
+                EXPECT_EQ(shm_->shared_owner_bitmap.load(), 0u);
+                EXPECT_EQ(ll->local_is_reserve_lock.load(), UB_LOCK_I);
+                (void)unregister_local_lock(shm_);
+            }
+        }
+    }
+}
+
+TEST_F(UbDistLockMemberTest, RebuildDelayedTokenInheritanceRegistersActualHolder)
+{
+    for (uint8_t node : {0, 3}) {
+        for (ub_lock_mode_t mode : {UB_LOCK_S, UB_LOCK_SX, UB_LOCK_X}) {
+            ub_rw_lock_t old_lock{};
+            auto ll = std::make_shared<LocalLock>(&old_lock);
+            ll->local_is_reserve_lock.store(mode);
+            register_local_lock(&old_lock, ll);
+            ub_lock_query_result_t entry = MakeEntry(node, UB_LOCK_I, 0, 0, false, mode);
+            const ub_lock_rebuild_info_t info{&entry, 1};
+            shm_->is_inited.store(0);
+            ASSERT_EQ(lock_->rebuild(&old_lock, info, ub_location_t{11, node}), UB_LOCK_SUCCESS);
+            const ub_location_t holder{123, node};
+            const ub_lock_policy_t policy{100, false, false};
+            if (mode == UB_LOCK_X) {
+                ASSERT_EQ(lock_->lock_x(policy, holder), UB_LOCK_SUCCESS);
+                EXPECT_EQ(shm_->lock_owner_x.load(), make_global_owner(node, holder.tid));
+                EXPECT_EQ(ll->lock_x_owner.load(), holder.tid);
+                EXPECT_EQ(lock_->unlock_x(policy, holder), UB_LOCK_SUCCESS);
+            } else if (mode == UB_LOCK_SX) {
+                ASSERT_EQ(lock_->lock_sx(policy, holder), UB_LOCK_SUCCESS);
+                EXPECT_EQ(shm_->lock_owner_sx.load(), make_global_owner(node, holder.tid));
+                EXPECT_EQ(ll->lock_sx_owner.load(), holder.tid);
+                EXPECT_EQ(lock_->unlock_sx(policy, holder), UB_LOCK_SUCCESS);
+            } else {
+                ASSERT_EQ(lock_->lock_s(policy, holder), UB_LOCK_SUCCESS);
+                EXPECT_EQ(ll->global_read_ref_count_.load(), 1);
+                EXPECT_EQ(lock_->unlock_s(policy, holder), UB_LOCK_SUCCESS);
+            }
+            EXPECT_EQ(shm_->reserve_lock_owner.load(), LOCK_INVALID_OWNER);
+            EXPECT_EQ(shm_->lock_word.load(), X_LOCK_DECR);
+            EXPECT_EQ(ll->local_is_reserve_lock.load(), UB_LOCK_I);
+            (void)unregister_local_lock(shm_);
+        }
+    }
+}
+
 TEST_F(UbDistLockMemberTest, RebuildSucceedsWithXHolder)
 {
     auto *old_lock = new ub_rw_lock_t{};
