@@ -58,7 +58,7 @@ Release 与 Debug 构建均默认启用安全编译选项（详见[安全说明]
 
 ### 锁对象共享内存大小
 
-锁对象直接构建在调用方提供的共享内存上，各锁对象的最小共享内存需求如下。
+锁对象直接构建在调用方提供的共享内存上，各锁对象的最小共享内存需求如下：
 
 **表 4** 锁对象共享内存需求
 
@@ -95,8 +95,8 @@ hosts=computer01,computer02
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | ---- | ---- | ----: | ---- |
-| lease_time | time_ms_t | 60000 | 锁租约时长，单位毫秒。建议设置为业务临界区最长执行时间的 2~3 倍。 |
-| heartbeat_timeout | time_ms_t | 500 | 心跳超时阈值，单位毫秒。超时未收到持锁者心跳则触发故障检测。 |
+| lease_time | time_ms_t | 60000 | 锁租约时长，单位 ms。建议设置为业务临界区最长执行时间的 2~3 倍。 |
+| heartbeat_timeout | time_ms_t | 500 | 心跳超时阈值，单位 ms。超时未收到持锁者心跳则触发故障检测。 |
 
 #### 加锁策略（ub_lock_policy_t，每次加锁可变）
 
@@ -104,7 +104,7 @@ hosts=computer01,computer02
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | ---- | ---- | ----: | ---- |
-| timeout_ts | time_ms_t | 10000 | 本次加锁的绝对超时时间戳，单位毫秒。 |
+| timeout_ts | time_ms_t | 10000 | 本次加锁的绝对超时时间，单位 ms。 |
 | allow_delay_release | bool | false | 是否允许延迟释放。开启后解锁时延迟通知等待者，可减少跨节点通知开销，但会延迟锁释放时机，适合高吞吐、低实时性场景。 |
 | recursive | bool | false | 是否允许同一线程递归加锁。 |
 
@@ -172,9 +172,9 @@ hosts=computer01,computer02
 
 | 配置项 | 类型 | 约束 | 说明 |
 | ---- | ---- | ---- | ---- |
-| heartbeat_interval_ms | uint32_t | 大于 0 | 本节点消费者心跳序号刷新周期，单位毫秒，会发布给其他节点用于超时窗口计算。 |
-| check_interval_ms | uint32_t | 大于 0 | 本节点生产者心跳监控线程轮询周期，单位毫秒。 |
-| timeout_ms | uint32_t | 大于 0 且不小于 2 × check_interval_ms | 本节点观察 peer 的最小超时阈值，单位毫秒。 |
+| heartbeat_interval_ms | uint32_t | 大于 0 | 本节点消费者心跳序号刷新周期，单位 ms，会发布给其他节点用于超时窗口计算。 |
+| check_interval_ms | uint32_t | 大于 0 | 本节点生产者心跳监控线程轮询周期，单位 ms。 |
+| timeout_ms | uint32_t | 大于 0 且不小于 2 × check_interval_ms | 本节点观察 peer 的最小超时阈值，单位 ms。 |
 
 说明：本节点观察某个 peer 的实际超时窗口为 `max(timeout_ms, peer heartbeat_interval_ms × 3, check_interval_ms × 2)`。
 

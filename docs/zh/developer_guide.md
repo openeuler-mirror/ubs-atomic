@@ -388,10 +388,10 @@ export LD_LIBRARY_PATH=/path/to/libboundscheck:$LD_LIBRARY_PATH
 
 | 配置项 | 建议值 | 说明 |
 |-------|-------|------|
-| lease_time | 60000ms (60秒) | 锁租约时间 |
+| lease_time | 60000ms | 锁租约时间 |
 | heartbeat_timeout | 500ms | 心跳超时 |
 | allow_delay_release | false | 生产环境建议关闭 |
-| timeout_ts | 1000-5000ms | 根据业务调整 |
+| timeout_ts | 1000ms ~ 5000ms | 根据业务调整 |
 
 #### 5.3.3 高可用配置
 
@@ -570,7 +570,7 @@ typedef struct {
 
 #### 7.1.1 依赖说明
 
-样例代码依赖 UBSM SDK，但核心库不直接链接它。核心库只处理已映射的共享内存地址。
+示例代码依赖 UBSM SDK，但核心库不直接链接它。核心库只处理已映射的共享内存地址。
 
 #### 7.1.2 头文件依赖
 
@@ -625,6 +625,7 @@ target_link_libraries(ubs-atomic PRIVATE ${BOUNDSCHECK_LIB})
 ```cpp
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 // 创建共享内存
 int fd = shm_open("/my_shm", O_CREAT | O_RDWR, 0666);
