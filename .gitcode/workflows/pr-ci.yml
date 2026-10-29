@@ -143,7 +143,7 @@ jobs:
           name: ci-result-x86-64
           path: .ci-results/x86_64
 
-   build_aarch64:
+  build_aarch64:
     name: build-aarch64
     needs: prepare
     runs-on: [self-hosted, openeuler, arm, cpu=8]
