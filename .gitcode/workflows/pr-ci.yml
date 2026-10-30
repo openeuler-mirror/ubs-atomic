@@ -1,4 +1,4 @@
-name: UBS-IO_CI
+name: UBS-atomic_CI
 
 on:
   pull_request:
@@ -7,6 +7,10 @@ on:
       - reopen
       - update
     branches: ['*']
+
+  pr_comment:
+    types: [created]
+    comments: ['^/retest$']
 
   pull_request_comment:
     types: [created]
@@ -37,240 +41,244 @@ permissions:
   note: none
   project: none
 
-jobs:
-  prepare:
-    name: Mark running
-    runs-on: [self-hosted, openeuler, arm, cpu=8]
-    steps:
-      - name: Mark PR as running
-        if: ${{ atomgit.event.pull_request.number != '' }}
-        uses: openlibing/pr-label-action@v1.0.0
-        with:
-          add_labels: ci-pipeline-running
-          remove_labels: ci-pipeline-success,ci-pipeline-failed,ci-pipeline-passed
-          token: ${{ secrets.PR_LABEL_TOKEN }}
-  
-  pre_commit:
-    name: pre-commit
-    needs: prepare
-    if: ${{ atomgit.event.pull_request.base.ref == 'master' || atomgit.event.pull_request.base.ref == 'openEuler-24.03-LTS-SP3' }}
-    runs-on: [self-hosted, openeuler, arm, cpu=8]
-    timeout-minutes: 30
-    container:
-      image: swr.cn-north-4.myhuaweicloud.com/ubscore/soe:latest
+stages:
+  prepare_stage:
+    name: Prepare
+    fail_fast: true
+    jobs:
+      prepare:
+        name: Mark running
+        runs-on: [self-hosted, openeuler, arm, cpu=8]
+        steps:
+          - name: Mark PR as running
+            if: ${{ atomgit.event.pull_request.number != '' }}
+            uses: openlibing/pr-label-action@v1.0.0
+            with:
+              add_labels: ci-pipeline-running
+              remove_labels: ci-pipeline-success,ci-pipeline-failed,ci-pipeline-passed
 
-    steps:
-      - name: Checkout PR merge code
-        uses: checkout
-        with:
-          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+  checks_stage:
+    name: Checks
+    fail_fast: false
+    jobs:
+      pre_commit:
+        name: pre-commit
+        if: ${{ atomgit.event.pull_request.base.ref == 'master' || atomgit.event.pull_request.base.ref == 'openEuler-24.03-LTS-SP3' }}
+        runs-on: [self-hosted, openeuler, arm, cpu=8]
+        timeout-minutes: 30
+        container:
+          image: swr.cn-north-4.myhuaweicloud.com/ubscore/soe:latest
 
-      - name: Install pre-commit
-        run: |
-          set -euxo pipefail
+        steps:
+          - name: Checkout PR merge code
+            uses: checkout
+            with:
+              ref: refs/merge-requests/${{ env.PR_ID }}/merge
 
-          sudo dnf install -y \
-            clang-tools-extra \
-            python3 \
-            python3-pip
+          - name: Install pre-commit
+            run: |
+              set -euxo pipefail
 
-          sudo python3 -m pip config set global.index-url \
-            https://repo.huaweicloud.com/repository/pypi/simple
-          sudo python3 -m pip config set global.timeout 120
+              sudo dnf install -y \
+                clang-tools-extra \
+                python3 \
+                python3-pip
 
-          sudo python3 -m pip install "pre-commit==4.3.0" \
-            --trusted-host repo.huaweicloud.com \
-            --timeout 120
+              sudo python3 -m pip config set global.index-url \
+                https://repo.huaweicloud.com/repository/pypi/simple
+              sudo python3 -m pip config set global.timeout 120
 
-          clang-format --version
+              sudo python3 -m pip install "pre-commit==4.3.0" \
+                --trusted-host repo.huaweicloud.com \
+                --timeout 120
 
-      - name: Run clang-format
-        run: |
-          set -euxo pipefail
-          sed -i 's/, -i/, -n, --Werror/g' .pre-commit-config.yaml
-          pre-commit run clang-format --all-files
+              clang-format --version
 
-      - name: Save result
-        if: ${{ always() }}
-        env:
-          CURRENT_JOB_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p .ci-results
-          if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
-            echo "SUCCESS" > .ci-results/pre-commit
-          else
-            echo "FAILED" > .ci-results/pre-commit
-          fi
+          - name: Run clang-format
+            run: |
+              set -euxo pipefail
+              sed -i 's/, -i/, -n, --Werror/g' .pre-commit-config.yaml
+              pre-commit run clang-format --all-files
 
-          echo "pre-commit: ${CURRENT_JOB_STATUS}" >> "${ATOMGIT_STEP_SUMMARY}"
+          - name: Save result
+            if: ${{ always() }}
+            env:
+              CURRENT_JOB_STATUS: ${{ job.status }}
+            run: |
+              mkdir -p .ci-results
+              if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
+                echo "SUCCESS" > .ci-results/pre-commit
+              else
+                echo "FAILED" > .ci-results/pre-commit
+              fi
 
-      - name: Upload result
-        if: ${{ always() }}
-        uses: upload-artifact
-        with:
-          name: ci-result-pre-commit
-          path: .ci-results/pre-commit
+              echo "pre-commit: ${CURRENT_JOB_STATUS}" >> "${ATOMGIT_STEP_SUMMARY}"
 
-  build_x86_64:
-    name: build-x86-64
-    needs: prepare
-    runs-on: [self-hosted, openeuler, x86, cpu=8]
-    timeout-minutes: 5
+          - name: Upload result
+            if: ${{ always() }}
+            uses: upload-artifact
+            with:
+              name: ci-result-pre-commit
+              path: .ci-results/pre-commit
 
-    steps:
-      - name: Preserve legacy x86_64 status
-        run: |
-          set -euo pipefail
-          echo "UBTurbo 仅支持 aarch64；上游 x86_64 检查为历史占位项，保持 SUCCESS。"
-          echo "x86_64=NOT_APPLICABLE" >> "${ATOMGIT_STEP_SUMMARY}"
+      build_x86_64:
+        name: build-x86-64
+        runs-on: [self-hosted, openeuler, x86, cpu=8]
+        timeout-minutes: 5
 
-      - name: Save result
-        if: ${{ always() }}
-        env:
-          CURRENT_JOB_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p .ci-results
-          if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
-            echo "SUCCESS" > .ci-results/x86_64
-          else
-            echo "FAILED" > .ci-results/x86_64
-          fi
+        steps:
+          - name: Preserve legacy x86_64 status
+            run: |
+              set -euo pipefail
+              echo "UBTurbo 仅支持 aarch64；上游 x86_64 检查为历史占位项，保持 SUCCESS。"
+              echo "x86_64=NOT_APPLICABLE" >> "${ATOMGIT_STEP_SUMMARY}"
 
-      - name: Upload result
-        if: ${{ always() }}
-        uses: upload-artifact
-        with:
-          name: ci-result-x86-64
-          path: .ci-results/x86_64
+          - name: Save result
+            if: ${{ always() }}
+            env:
+              CURRENT_JOB_STATUS: ${{ job.status }}
+            run: |
+              mkdir -p .ci-results
+              if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
+                echo "SUCCESS" > .ci-results/x86_64
+              else
+                echo "FAILED" > .ci-results/x86_64
+              fi
 
-  build_aarch64:
-    name: build-aarch64
-    needs: prepare
-    runs-on: [self-hosted, openeuler, arm, cpu=8]
-    timeout-minutes: 60
-    container:
-      image: swr.cn-north-4.myhuaweicloud.com/ubscore/soe:latest
+          - name: Upload result
+            if: ${{ always() }}
+            uses: upload-artifact
+            with:
+              name: ci-result-x86-64
+              path: .ci-results/x86_64
 
-    steps:
-      - name: Checkout PR merge code
-        uses: checkout
-        with:
-          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+      build_aarch64:
+        name: build-aarch64
+        runs-on: [self-hosted, openeuler, arm, cpu=8]
+        timeout-minutes: 60
+        container:
+          image: swr.cn-north-4.myhuaweicloud.com/ubscore/soe:latest
 
-      - name: Install dependencies
-        run: |
-          set -euxo pipefail
+        steps:
+          - name: Checkout PR merge code
+            uses: checkout
+            with:
+              ref: refs/merge-requests/${{ env.PR_ID }}/merge
 
-          sudo dnf install -y \
-            ninja-build \
-            gcc \
-            gcc-c++ \
-            make \
-            cmake \
-            bc \
-            git \
-            curl \
-            patch \
-            dos2unix \
-            libboundscheck
+          - name: Install dependencies
+            run: |
+              set -euxo pipefail
 
-          ldd --version
+              sudo dnf install -y \
+                ninja-build \
+                gcc \
+                gcc-c++ \
+                make \
+                cmake \
+                bc \
+                git \
+                curl \
+                patch \
+                dos2unix \
+                libboundscheck
 
-      - name: Build ubs-atomic release
-        run: |
-          set -euxo pipefail
-          bash build.sh -c
+              ldd --version
 
-      - name: Prepare UT dependencies
-        run: |
-          set -euxo pipefail
+          - name: Build ubs-atomic release
+            run: |
+              set -euxo pipefail
+              bash build.sh -c
 
-          cd test/3rdparty
+          - name: Prepare UT dependencies
+            run: |
+              set -euxo pipefail
 
-          git clone --depth=1 --branch v2.7 \
-            https://gitee.com/mirrors_sinojelly/mockcpp.git \
-            mockcpp
+              cd test/3rdparty
 
-          git clone --depth=1 --branch release-1.12.1 \
-            https://gitee.com/mirrors/googletest.git \
-            googletest
+              git clone --depth=1 --branch v2.7 \
+                https://gitee.com/mirrors_sinojelly/mockcpp.git \
+                mockcpp
 
-      - name: Run ubs-atomic UT
-        run: |
-          set -euxo pipefail
+              git clone --depth=1 --branch release-1.12.1 \
+                https://gitee.com/mirrors/googletest.git \
+                googletest
 
-          cd test
-          cp run_ut.sh run_ut.ci.sh
-          sed -i 's/^lcov /# lcov /g' run_ut.ci.sh
-          sed -i 's/^genhtml /# genhtml /g' run_ut.ci.sh
-          bash run_ut.ci.sh
+          - name: Run ubs-atomic UT
+            run: |
+              set -euxo pipefail
 
-      - name: Upload build output
-        uses: upload-artifact
-        with:
-          name: ubs-atomic-release-aarch64
-          path: dist/release/
+              cd test
+              cp run_ut.sh run_ut.ci.sh
+              sed -i 's/^lcov /# lcov /g' run_ut.ci.sh
+              sed -i 's/^genhtml /# genhtml /g' run_ut.ci.sh
+              bash run_ut.ci.sh
 
-      - name: Save result
-        if: ${{ always() }}
-        env:
-          CURRENT_JOB_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p .ci-results
-          if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
-            echo "SUCCESS" > .ci-results/aarch64
-          else
-            echo "FAILED" > .ci-results/aarch64
-          fi
+          - name: Upload build output
+            uses: upload-artifact
+            with:
+              name: ubs-atomic-release-aarch64
+              path: dist/release/
 
-          echo "aarch64: ${CURRENT_JOB_STATUS}" >> "${ATOMGIT_STEP_SUMMARY}"
+          - name: Save result
+            if: ${{ always() }}
+            env:
+              CURRENT_JOB_STATUS: ${{ job.status }}
+            run: |
+              mkdir -p .ci-results
+              if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
+                echo "SUCCESS" > .ci-results/aarch64
+              else
+                echo "FAILED" > .ci-results/aarch64
+              fi
 
-      - name: Upload result
-        if: ${{ always() }}
-        uses: upload-artifact
-        with:
-          name: ci-result-aarch64
-          path: .ci-results/aarch64
+              echo "aarch64: ${CURRENT_JOB_STATUS}" >> "${ATOMGIT_STEP_SUMMARY}"
 
-  dt:
-    name: DT
-    needs: prepare
-    runs-on: [self-hosted, openeuler, arm, cpu=8]
-    timeout-minutes: 10
-    container:
-      image: swr.cn-north-4.myhuaweicloud.com/ubscore/soe:latest
+          - name: Upload result
+            if: ${{ always() }}
+            uses: upload-artifact
+            with:
+              name: ci-result-aarch64
+              path: .ci-results/aarch64
 
-    steps:
-      - name: Checkout PR merge code
-        uses: checkout
-        with:
-          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+      dt:
+        name: DT
+        runs-on: [self-hosted, openeuler, arm, cpu=8]
+        timeout-minutes: 10
+        container:
+          image: swr.cn-north-4.myhuaweicloud.com/ubscore/soe:latest
 
-      - name: Preserve legacy DT status
-        run: |
-          set -euxo pipefail
-          echo "上游 atomic DT Jenkins Job 仅执行 PR checkout/merge。"
-          echo "实际 ubs_atomic_ut 已在 build-aarch64 中执行。"
-          echo "DT=PRECHECK_ONLY" >> "${ATOMGIT_STEP_SUMMARY}"
+        steps:
+          - name: Checkout PR merge code
+            uses: checkout
+            with:
+              ref: refs/merge-requests/${{ env.PR_ID }}/merge
 
-      - name: Save result
-        if: ${{ always() }}
-        env:
-          CURRENT_JOB_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p .ci-results
-          if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
-            echo "SUCCESS" > .ci-results/DT
-          else
-            echo "FAILED" > .ci-results/DT
-          fi
+          - name: Preserve legacy DT status
+            run: |
+              set -euxo pipefail
+              echo "上游 atomic DT Jenkins Job 仅执行 PR checkout/merge。"
+              echo "实际 ubs_atomic_ut 已在 build-aarch64 中执行。"
+              echo "DT=PRECHECK_ONLY" >> "${ATOMGIT_STEP_SUMMARY}"
 
-      - name: Upload result
-        if: ${{ always() }}
-        uses: upload-artifact
-        with:
-          name: ci-result-dt
-          path: .ci-results/DT
+          - name: Save result
+            if: ${{ always() }}
+            env:
+              CURRENT_JOB_STATUS: ${{ job.status }}
+            run: |
+              mkdir -p .ci-results
+              if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
+                echo "SUCCESS" > .ci-results/DT
+              else
+                echo "FAILED" > .ci-results/DT
+              fi
+
+          - name: Upload result
+            if: ${{ always() }}
+            uses: upload-artifact
+            with:
+              name: ci-result-dt
+              path: .ci-results/DT
+
 post:
   jobs:
     report_result:
@@ -283,4 +291,3 @@ post:
           with:
             add_labels: ${{ pipeline.upstream_status == 'COMPLETED' && 'ci-pipeline-success' || 'ci-pipeline-failed' }}
             remove_labels: ci-pipeline-running,${{ pipeline.upstream_status == 'COMPLETED' && 'ci-pipeline-failed' || 'ci-pipeline-success' }}
-            token: ${{ secrets.PR_LABEL_TOKEN }}
