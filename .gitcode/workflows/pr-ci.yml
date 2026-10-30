@@ -157,7 +157,7 @@ stages:
         runs-on: [self-hosted, openeuler, arm, cpu=8]
         timeout-minutes: 60
         container:
-          image: swr.cn-north-4.myhuaweicloud.com/ubscore/soe:latest
+          image: swr.cn-north-4.myhuaweicloud.com/openeuler/ci/soe:latest
 
         steps:
           - name: Checkout PR merge code
