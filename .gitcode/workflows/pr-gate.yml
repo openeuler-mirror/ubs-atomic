@@ -1,0 +1,277 @@
+name: UBS-atomic-PR
+
+on:
+  pull_request_target:
+    types:
+      - open
+      - reopen
+      - update
+    branches: ['*']
+
+  pr_comment:
+    types: [created]
+    keyword: '^/retest$'
+
+  pull_request_comment:
+    types: [created]
+    comments: ['^/retest$']
+    branches: ['*']
+
+env:
+  PR_ID: ${{ atomgit.event.pull_request.number }}
+  TARGET_BRANCH: ${{ atomgit.event.pull_request.base.ref }}
+  HEAD_SHA: ${{ atomgit.event.pull_request.head.sha }}
+  REPO_FULL_NAME: ${{ atomgit.event.repository.full_name }}
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  enable: true
+  max: 3
+  exceed-action: QUEUE
+  preemption:
+    enable: true
+    events: [mr_id]
+
+permissions:
+  repository: read
+  pr: write
+  issue: read
+  note: none
+  action: read
+  id-token: write
+  project: none
+
+jobs:
+  associate_pr_comment:
+    name: associate_pr_comment
+    runs-on: [self-hosted, openeuler, x86, cpu=4]
+    steps:
+      - name: associate-pr-comment
+        uses: associate-pr-comment
+
+  mark_running:
+    name: Mark running
+    needs: [associate_pr_comment]
+    runs-on: [self-hosted, openeuler, x86, cpu=4]
+
+    steps:
+      - name: Mark PR as running
+        if: ${{ atomgit.event.pull_request.number != '' }}
+        uses: openlibing/pr-label-action@v1.0.0
+        with:
+          add_labels: ci-pipeline-running
+          remove_labels: ci-pipeline-passed,ci-pipeline-failed
+
+  issue_check:
+    name: Issue check
+    needs: [mark_running]
+    runs-on: [self-hosted, openeuler, x86, cpu=4]
+    timeout-minutes: 10
+
+    steps:
+      - name: Check associated issue
+        env:
+          ATOMGIT_TOKEN: ${{ atomgit.token }}
+        run: |
+          set -euo pipefail
+
+          branch_list=(
+            'master'
+            'openEuler-24.03-LTS-SP3'
+            'br_bugfix_20260330'
+            'br_BeiMing.26.0.RC1'
+          )
+
+          if printf '%s\n' "${branch_list[@]}" |
+            grep -Fxq "${TARGET_BRANCH:-}"; then
+            echo "分支 ${TARGET_BRANCH} 需要检查 Issue 关联。"
+          else
+            echo "分支 ${TARGET_BRANCH:-} 不需要检查 Issue 关联。"
+            exit 0
+          fi
+
+          if ! rpm -q curl jq >/dev/null 2>&1; then
+            sudo dnf install -y curl jq
+          fi
+
+          api_root="${ATOMGIT_API_URL:-https://api.gitcode.com}"
+          api_root="${api_root%/}"
+          api_root="${api_root%/v5}"
+          api_root="${api_root%/v8}"
+          api_root="${api_root%/api}"
+
+          issues_url="${api_root}/api/v5/repos/${REPO_FULL_NAME}/pulls/${PR_ID}/issues"
+
+          if ! issues_json="$(curl -fsSL \
+            -H "PRIVATE-TOKEN: ${ATOMGIT_TOKEN}" \
+            -H "Accept: application/json" \
+            "${issues_url}" 2>/dev/null)"; then
+            issues_json="$(curl -fsSL \
+              -H "Authorization: token ${ATOMGIT_TOKEN}" \
+              -H "Accept: application/json" \
+              "${issues_url}")"
+          fi
+
+          issues_count="$(jq \
+            'if type == "array" then length else -1 end' \
+            <<<"${issues_json}")"
+
+          if [[ "${issues_count}" == "0" ]]; then
+            echo "PR #${PR_ID} 未关联 Issue，门禁失败。"
+            exit 1
+          fi
+
+          if [[ "${issues_count}" -lt 0 ]]; then
+            echo "获取 PR 关联 Issue 失败，接口返回内容不是数组。"
+            exit 1
+          fi
+
+          if jq -e \
+            'length > 0 and .[0].number != null' \
+            <<<"${issues_json}" >/dev/null; then
+            echo "PR #${PR_ID} 已关联 Issue。"
+            exit 0
+          fi
+
+          echo "PR #${PR_ID} 返回了 Issue 数据，但没有有效的 Issue 编号。"
+          exit 1
+
+  check_sca:
+    name: check_sca
+    needs: [mark_running]
+    runs-on: [self-hosted, openeuler, x86, cpu=4]
+    timeout-minutes: 30
+
+    steps:
+      - name: Run OpenLibing SCA
+        uses: openlibing/sca-action/sca-pr-action@v1.0.1
+        with:
+          project-name: ubs-atomic
+          platform-domain: https://gitcode.com
+
+  check_anti_poisoning:
+    name: check_anti_poisoning
+    needs: [mark_running]
+    runs-on: [self-hosted, openeuler, x86, cpu=4]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout PR merge code
+        uses: checkout
+        with:
+          ref: refs/merge-requests/${{ env.PR_ID }}/merge
+          allow-unsafe-pr-checkout: true
+
+      - name: Run malicious code scan
+        uses: openlibing/malicious-code-scan-action/malicious-code-pr-scan-action@v1.0.0
+        with:
+          repository-name: ${{ env.REPO_FULL_NAME }}
+          pr-id: ${{ env.PR_ID }}
+          project-name: ubs-atomic
+
+  validation:
+    name: Build and test
+    needs: [mark_running]
+    uses: ./.gitcode/workflows/pr-ci.yml
+    with:
+      pr_id: ${{ atomgit.event.pull_request.number }}
+      target_branch: ${{ atomgit.event.pull_request.base.ref }}
+      merge_commit_sha: ${{ atomgit.event.pull_request.merge_commit_sha }}
+
+  report_result:
+    name: Report result
+    needs:
+      - mark_running
+      - issue_check
+      - check_sca
+      - check_anti_poisoning
+      - validation
+    if: ${{ always() }}
+    runs-on: [self-hosted, openeuler, x86, cpu=4]
+
+    steps:
+      - name: Check result freshness
+        id: freshness
+        env:
+          ATOMGIT_TOKEN: ${{ atomgit.token }}
+        run: |
+          set -euo pipefail
+
+          command -v curl >/dev/null 2>&1 ||
+            sudo yum install -y curl
+          command -v jq >/dev/null 2>&1 ||
+            sudo yum install -y jq
+
+          api_root="${ATOMGIT_API_URL:-https://api.gitcode.com}"
+          api_root="${api_root%/}"
+          api_root="${api_root%/v5}"
+          api_root="${api_root%/v8}"
+          api_root="${api_root%/api}"
+
+          api_get() {
+            local url="$1"
+
+            curl -fsSL \
+              -H "PRIVATE-TOKEN: ${ATOMGIT_TOKEN}" \
+              -H "Accept: application/json" \
+              "${url}" 2>/dev/null ||
+            curl -fsSL \
+              -H "Authorization: token ${ATOMGIT_TOKEN}" \
+              -H "Accept: application/json" \
+              "${url}"
+          }
+
+          pr_json="$(
+            api_get "${api_root}/api/v5/repos/${REPO_FULL_NAME}/pulls/${PR_ID}"
+          )"
+          current_head_sha="$(jq -r '.head.sha // empty' <<<"${pr_json}")"
+
+          if [[ -z "${current_head_sha}" || "${current_head_sha}" != "${HEAD_SHA}" ]]; then
+            echo "is_latest=false" >> "${ATOMGIT_OUTPUT}"
+            echo "Skip stale result: PR head changed."
+            exit 0
+          fi
+
+          runs_json="$(
+            api_get "${api_root}/api/v8/repos/${REPO_FULL_NAME}/actions/runs?workflow_name=UBS-atomic-PR&per_page=100&page=1"
+          )"
+
+          latest_run_number="$(
+            jq -r \
+              --arg pr "${PR_ID}" \
+              --arg sha "${HEAD_SHA}" '
+                [
+                  .workflow_runs[]?
+                  | select(
+                      ((.title // "") |
+                        test("(^|[^0-9])PR\\s+#?" + $pr + "([^0-9]|$)")) or
+                      (.head_sha == $sha)
+                    )
+                ]
+                | max_by(.run_number)
+                | .run_number // empty
+              ' <<<"${runs_json}"
+          )"
+
+          if [[ -z "${latest_run_number}" ]]; then
+            echo "Unable to determine the latest run for PR #${PR_ID}." >&2
+            exit 1
+          fi
+
+          if (( ATOMGIT_RUN_NUMBER < latest_run_number )); then
+            echo "is_latest=false" >> "${ATOMGIT_OUTPUT}"
+            echo "Skip stale result: current run ${ATOMGIT_RUN_NUMBER}, latest run ${latest_run_number}."
+            exit 0
+          fi
+
+          echo "is_latest=true" >> "${ATOMGIT_OUTPUT}"
+
+      - name: Set result label
+        if: ${{ steps.freshness.outputs.is_latest == 'true' }}
+        uses: openlibing/pr-label-action@v1.0.0
+        with:
+          add_labels: ${{ needs.mark_running.result == 'success' && needs.issue_check.result == 'success' && needs.check_sca.result == 'success' && needs.check_anti_poisoning.result == 'success' && needs.validation.result == 'success' && 'ci-pipeline-passed' || 'ci-pipeline-failed' }}
+          remove_labels: ci-pipeline-running,${{ needs.mark_running.result == 'success' && needs.issue_check.result == 'success' && needs.check_sca.result == 'success' && needs.check_anti_poisoning.result == 'success' && needs.validation.result == 'success' && 'ci-pipeline-failed' || 'ci-pipeline-passed' }}
