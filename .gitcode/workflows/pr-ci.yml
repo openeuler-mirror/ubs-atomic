@@ -1,69 +1,45 @@
-name: UBS-atomic_CI
+name: UBS-atomic-Validation
 
 on:
-  pull_request:
-    types:
-      - open
-      - reopen
-      - update
-    branches: ['*']
-
-  pr_comment:
-    types: [created]
-    comments: ['^/retest$']
-
-  pull_request_comment:
-    types: [created]
-    comments: ['^/retest$']
-    branches: ['*']
+  workflow_call:
+    inputs:
+      pr_id:
+        description: Pull request number
+        required: true
+        type: string
+      target_branch:
+        description: Pull request target branch
+        required: true
+        type: string
+      merge_commit_sha:
+        description: Pull request merge commit
+        required: true
+        type: string
 
 env:
-  PR_ID: ${{ atomgit.event.pull_request.number }}
-  TARGET_BRANCH: ${{ atomgit.event.pull_request.base.ref }}
-  HEAD_SHA: ${{ atomgit.event.pull_request.head.sha }}
+  PR_ID: ${{ inputs.pr_id }}
+  TARGET_BRANCH: ${{ inputs.target_branch }}
+  BOOSTKIT_CI_REVISION: 6ed28bce8cdba0d989cf653944a28b0cbf8da2f3
 
 defaults:
   run:
     shell: bash
 
-concurrency:
-  enable: true
-  max: 3
-  exceed-action: QUEUE
-  preemption:
-    enable: true
-    events: [mr_id]
-
 permissions:
   repository: read
-  pr: write
+  pr: none
   issue: none
   note: none
   project: none
 
 stages:
-  prepare_stage:
-    name: Prepare
-    fail_fast: true
-    jobs:
-      prepare:
-        name: Mark running
-        runs-on: [self-hosted, openeuler, arm, cpu=8]
-        steps:
-          - name: Mark PR as running
-            if: ${{ atomgit.event.pull_request.number != '' }}
-            uses: openlibing/pr-label-action@v1.0.0
-            with:
-              add_labels: ci-pipeline-running
-              remove_labels: ci-pipeline-success,ci-pipeline-failed,ci-pipeline-passed
-
   checks_stage:
     name: Checks
     fail_fast: false
     jobs:
       pre_commit:
         name: pre-commit
-        if: ${{ atomgit.event.pull_request.base.ref == 'master' || atomgit.event.pull_request.base.ref == 'openEuler-24.03-LTS-SP3' }}
+        if: ${{ inputs.target_branch == 'master' || inputs.target_branch == 'openEuler-24.03-LTS-SP3' }}
         runs-on: [self-hosted, openeuler, arm, cpu=8]
         timeout-minutes: 30
         container:
@@ -73,9 +49,10 @@ stages:
           - name: Checkout PR merge code
             uses: checkout
             with:
-              ref: refs/merge-requests/${{ env.PR_ID }}/merge
+              ref: ${{ inputs.merge_commit_sha }}
+              allow-unsafe-pr-checkout: true
 
-          - name: Install pre-commit
+          - name: Install pre-commit dependencies
             run: |
               set -euxo pipefail
 
@@ -84,21 +61,20 @@ stages:
                 python3 \
                 python3-pip
 
-              sudo python3 -m pip config set global.index-url \
-                https://repo.huaweicloud.com/repository/pypi/simple
-              sudo python3 -m pip config set global.timeout 120
-
-              sudo python3 -m pip install "pre-commit==4.3.0" \
-                --trusted-host repo.huaweicloud.com \
-                --timeout 120
-
               clang-format --version
 
-          - name: Run clang-format
+          - name: Prepare clang-format check
             run: |
               set -euxo pipefail
+
               sed -i 's/, -i/, -n, --Werror/g' .pre-commit-config.yaml
-              pre-commit run clang-format --all-files
+
+          - name: Run pre-commit
+            uses: openlibing/pre-commit-action@v1.0.1
+            env:
+              SKIP: run-build,run-build-test,clang-tidy,clang-tidy-test
+            with:
+              extra_args: --all-files
 
           - name: Save result
             if: ${{ always() }}
@@ -163,7 +139,8 @@ stages:
           - name: Checkout PR merge code
             uses: checkout
             with:
-              ref: refs/merge-requests/${{ env.PR_ID }}/merge
+              ref: ${{ inputs.merge_commit_sha }}
+              allow-unsafe-pr-checkout: true
 
           - name: Install dependencies
             run: |
@@ -251,7 +228,8 @@ stages:
           - name: Checkout PR merge code
             uses: checkout
             with:
-              ref: refs/merge-requests/${{ env.PR_ID }}/merge
+              ref: ${{ inputs.merge_commit_sha }}
+              allow-unsafe-pr-checkout: true
 
           - name: Preserve legacy DT status
             run: |
