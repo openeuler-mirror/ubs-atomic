@@ -61,6 +61,11 @@ stages:
                 python3 \
                 python3-pip
 
+              if ! command -v python >/dev/null 2>&1; then
+                sudo ln -s "$(command -v python3)" /usr/bin/python
+              fi
+              python --version
+              python3 --version
               clang-format --version
 
           - name: Prepare clang-format check
