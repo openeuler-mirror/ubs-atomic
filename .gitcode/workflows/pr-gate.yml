@@ -246,9 +246,8 @@ jobs:
                 [
                   .workflow_runs[]?
                   | select(
-                      ((.title // "") |
-                        test("(^|[^0-9])PR\\s+#?" + $pr + "([^0-9]|$)")) or
-                      (.head_sha == $sha)
+                      (((.pull_request_id // "") | tostring) == $pr) or
+                      ((.head_sha // "") == $sha)
                     )
                 ]
                 | max_by(.run_number)
