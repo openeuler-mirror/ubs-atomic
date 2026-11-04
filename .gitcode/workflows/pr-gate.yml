@@ -47,7 +47,7 @@ permissions:
 jobs:
   associate_pr_comment:
     name: associate_pr_comment
-    runs-on: [self-hosted, openeuler, x86, cpu=4]
+    runs-on: [self-hosted, ubse, x86, cpu=4]
     steps:
       - name: associate-pr-comment
         uses: associate-pr-comment
@@ -55,7 +55,7 @@ jobs:
   mark_running:
     name: Mark running
     needs: [associate_pr_comment]
-    runs-on: [self-hosted, openeuler, x86, cpu=4]
+    runs-on: [self-hosted, ubse, x86, cpu=4]
 
     steps:
       - name: Mark PR as running
@@ -68,7 +68,7 @@ jobs:
   issue_check:
     name: Issue check
     needs: [mark_running]
-    runs-on: [self-hosted, openeuler, x86, cpu=4]
+    runs-on: [self-hosted, ubse, x86, cpu=4]
     timeout-minutes: 10
 
     steps:
@@ -142,7 +142,7 @@ jobs:
   check_sca:
     name: check_sca
     needs: [mark_running]
-    runs-on: [self-hosted, openeuler, x86, cpu=4]
+    runs-on: [self-hosted, ubse, x86, cpu=4]
     timeout-minutes: 30
 
     steps:
@@ -155,7 +155,7 @@ jobs:
   check_anti_poisoning:
     name: check_anti_poisoning
     needs: [mark_running]
-    runs-on: [self-hosted, openeuler, x86, cpu=4]
+    runs-on: [self-hosted, ubse, x86, cpu=4]
     timeout-minutes: 15
 
     steps:
