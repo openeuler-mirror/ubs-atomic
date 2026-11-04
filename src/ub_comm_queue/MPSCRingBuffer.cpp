@@ -584,8 +584,21 @@ uint32_t MPSCRingBuffer::dequeue(void *buffer, uint32_t buffer_cap)
     }
 
     auto *hdr = reinterpret_cast<message_header_t *>(entry->data);
-    uint32_t real_len = sizeof(message_header_t) + hdr->body_length;
-    uint32_t copy_len = (real_len > buffer_cap) ? buffer_cap : real_len;
+    // 防御：body_length 来自共享内存 Entry 头，可能被半写/越界/篡改。
+    // 合法消息满足 sizeof(header) + body_length <= max_msg_size_（enqueue 已强制），
+    // 用 64 位计算避免 uint32 回绕；超限说明 Entry 损坏，跳过该消息而非按 buffer_cap
+    // 截断读取，否则 memcpy 会越过 entry_stride_ 读到相邻槽位甚至越出共享内存映射。
+    uint64_t real_len = static_cast<uint64_t>(sizeof(message_header_t)) + hdr->body_length;
+    if (__builtin_expect(real_len > max_msg_size_, 0)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR,
+                   "Corrupt ring entry skipped: body_length=%u exceeds max_msg_size=%llu, ring=%p head=%llu",
+                   hdr->body_length, static_cast<unsigned long long>(max_msg_size_), (void *)this,
+                   static_cast<unsigned long long>(cur_head));
+        entry->ready_seq.store(0, std::memory_order_relaxed);
+        head_.store(expected_seq, std::memory_order_release);
+        return 0;
+    }
+    uint32_t copy_len = (real_len > buffer_cap) ? buffer_cap : static_cast<uint32_t>(real_len);
 
     std::memcpy(buffer, entry->data, copy_len);
     // 重置状态

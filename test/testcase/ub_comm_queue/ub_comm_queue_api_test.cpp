@@ -7,20 +7,69 @@
 #include <ctime>
 #include <functional>
 #include <memory>
+#include <new>
 #include <thread>
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "mockcpp/mokc.h"
 
 #define private public
 #include "UBShmTransport.h"
 #undef private
 #include "ub_dist_comm_queue.h"
 
+namespace {
+// 仅 UT 替换分配器；故障开关限于当前线程，且只影响下一次分配。
+thread_local bool g_fail_next_allocation = false;
+
+class ScopedAllocationFailure {
+public:
+    ScopedAllocationFailure()
+    {
+        g_fail_next_allocation = true;
+    }
+    ~ScopedAllocationFailure()
+    {
+        g_fail_next_allocation = false;
+    }
+};
+} // namespace
+
+void *operator new(std::size_t size)
+{
+    if (g_fail_next_allocation) {
+        g_fail_next_allocation = false;
+        throw std::bad_alloc();
+    }
+    while (true) {
+        if (void *ptr = std::malloc(size == 0 ? 1 : size)) {
+            return ptr;
+        }
+        auto handler = std::get_new_handler();
+        if (handler == nullptr) {
+            throw std::bad_alloc();
+        }
+        handler();
+    }
+}
+
+void operator delete(void *ptr) noexcept
+{
+    std::free(ptr);
+}
+
+void operator delete(void *ptr, std::size_t) noexcept
+{
+    std::free(ptr);
+}
+
 namespace ub_comm_queue {
 namespace ut {
 namespace {
 static constexpr uint32_t DEFAULT_NODE_NUM = 2;
+// mockcpp 不支持 noexcept 函数类型，转为同签名的普通函数指针进行打桩。
+using SetAffinityFunction = int (*)(pthread_t, size_t, const cpu_set_t *);
 void DummyCallback(const message_t *, void *) {}
 std::atomic<uint32_t> g_async_callback_count{0};
 std::atomic<uint32_t> g_log_callback_count{0};
@@ -296,6 +345,78 @@ TEST(UbCommQueueApiTest, InitDeinitAndWrapperMethodsUseTransport)
     EXPECT_EQ(g_transport, nullptr);
 }
 
+// 问题#10：build_node_mapping 仅校验节点数量不校验单个 node_id 取值范围，node_id 为 uint8_t（可到 255）。
+// ring_map 中出现 node_id >= MAX_NODES_LIMIT(16) 时初始化可通过，后续以逻辑 node_id 直接下标
+// 访问 ring_caches_[node_id][prio]（数组仅 [16][8]）越界写相邻内存。修复后 init 直接拒绝。
+TEST(UbCommQueueApiTest, InitRejectsNodeIdExceedingMaxNodesLimit)
+{
+    g_transport = nullptr;
+    ApiEnv env(200); // node_id=200，远超 MAX_NODES_LIMIT
+    ub_shm_comm_t handle = nullptr;
+    EXPECT_NE(ub_comm_queue_init(&handle, env.InitArea(), env.RingMap(), env.Conf()), UB_COMM_OK);
+    EXPECT_EQ(handle, nullptr);
+    g_transport = nullptr;
+}
+
+// 问题#10 纵深防御：try_populate_cache 直接以 node_id 下标访问 ring_caches_，修复前仅校验 prio。
+// 修复后对 node_id >= MAX_NODES_LIMIT 返回 -EINVAL，杜绝越界访问。
+TEST(UbCommQueueApiTest, TryPopulateCacheRejectsOutOfRangeNodeId)
+{
+    g_transport = nullptr;
+    ApiEnv env(0);
+    ub_shm_comm_t handle = nullptr;
+    ASSERT_EQ(ub_comm_queue_init(&handle, env.InitArea(), env.RingMap(), env.Conf()), UB_COMM_OK);
+    auto *transport = static_cast<UBShmTransport *>(handle);
+    EXPECT_EQ(transport->try_populate_cache(MAX_NODES_LIMIT, 0), -EINVAL);     // 边界：恰好越界
+    EXPECT_EQ(transport->try_populate_cache(200, 0), -EINVAL);                 // 远超上界
+    EXPECT_EQ(transport->try_populate_cache(0, MAX_PRIORITY_LEVELS), -EINVAL); // prio 越界仍被拒
+    EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
+    g_transport = nullptr;
+}
+
+class UbCommQueueFaultTest : public ::testing::Test {
+protected:
+    void TearDown() override
+    {
+        GlobalMockObject::verify();
+    }
+};
+
+// 问题#11：模拟绑核失败，验证真实分发线程仍能接收并处理后续消息。
+TEST_F(UbCommQueueFaultTest, DispatcherContinuesAfterPinFailure)
+{
+    MOCKER(static_cast<SetAffinityFunction>(pthread_setaffinity_np)).expects(once()).will(returnValue(EINVAL));
+    g_async_callback_count.store(0, std::memory_order_release);
+    ApiEnv env(0);
+    env.Conf()->cpu_id = 0;
+    UBShmTransport transport;
+    ASSERT_EQ(transport.init(env.InitArea(), env.RingMap(), env.Conf()), UB_COMM_OK);
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_SYNC, AsyncCallback, nullptr), UB_COMM_OK);
+
+    message_t msg = MakeMessage(8);
+    ASSERT_EQ(transport.send(&msg), UB_COMM_OK);
+    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(300),
+                          []() { return g_async_callback_count.load(std::memory_order_acquire) == 1; }));
+}
+
+TEST_F(UbCommQueueFaultTest, DispatcherSkipsPinningWhenDisabled)
+{
+    MOCKER(static_cast<SetAffinityFunction>(pthread_setaffinity_np)).expects(never());
+    UBShmTransport transport;
+    transport.cpu_id_ = -1;
+    transport.stop_flag_.store(true, std::memory_order_release);
+    EXPECT_NO_THROW(transport.run_dispatcher_loop());
+}
+
+TEST_F(UbCommQueueFaultTest, DispatcherAcceptsSuccessfulPinning)
+{
+    MOCKER(static_cast<SetAffinityFunction>(pthread_setaffinity_np)).expects(once()).will(returnValue(0));
+    UBShmTransport transport;
+    transport.cpu_id_ = 0;
+    transport.stop_flag_.store(true, std::memory_order_release);
+    EXPECT_NO_THROW(transport.run_dispatcher_loop());
+}
+
 TEST(UbCommQueueApiTest, SecondInitIsMarkedNonLockAndBadConfigReturnsError)
 {
     g_transport = nullptr;
@@ -369,6 +490,73 @@ TEST(UbCommQueueApiTest, AsyncCallbackDispatchesThroughThreadPool)
     EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
 }
 
+// 问题#12：无线程和已关闭的线程池均会抛异常，失败后同步和异步分发应仍可继续。
+TEST_F(UbCommQueueFaultTest, AsyncDispatchRecoversAfterEnqueueFailure)
+{
+    g_async_callback_count.store(0, std::memory_order_release);
+    UBShmTransport transport;
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_ASYNC, AsyncCallback, nullptr), UB_COMM_OK);
+    auto hdr = MakeMessage(8).header;
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), -EPIPE);
+
+    transport.worker_pool_ = new ThreadPool(0);
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), -EPIPE);
+    EXPECT_TRUE(transport.worker_pool_->taskQueue_.empty());
+    transport.worker_pool_->shuttingDown_.store(true, std::memory_order_release);
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), -EPIPE);
+    EXPECT_TRUE(transport.worker_pool_->taskQueue_.empty());
+    EXPECT_EQ(g_async_callback_count.load(std::memory_order_acquire), 0u);
+
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_SYNC, AsyncCallback, nullptr), UB_COMM_OK);
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), UB_COMM_OK);
+    EXPECT_EQ(g_async_callback_count.load(std::memory_order_acquire), 1u);
+
+    delete transport.worker_pool_;
+    transport.worker_pool_ = nullptr;
+    transport.worker_pool_ = new ThreadPool(1);
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_ASYNC, AsyncCallback, nullptr), UB_COMM_OK);
+    EXPECT_EQ(transport.dispatch_internal(&hdr, sizeof(hdr)), UB_COMM_OK);
+    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(300),
+                          []() { return g_async_callback_count.load(std::memory_order_acquire) == 2; }));
+}
+
+void CheckAsyncAllocationFailure(uint32_t bodyLength)
+{
+    g_async_callback_count.store(0, std::memory_order_release);
+    UBShmTransport transport;
+    transport.worker_pool_ = new ThreadPool(1);
+    ASSERT_EQ(transport.register_func(8, UB_FUNC_ASYNC, AsyncCallback, nullptr), UB_COMM_OK);
+    struct {
+        message_header_t header;
+        char body[128];
+    } packet{};
+    packet.header = MakeMessage(8).header;
+    packet.header.body_length = bodyLength;
+    const uint32_t len = sizeof(message_header_t) + bodyLength;
+    int result = UB_COMM_OK;
+    {
+        ScopedAllocationFailure failure;
+        EXPECT_NO_THROW(result = transport.dispatch_internal(&packet, len));
+    }
+    EXPECT_EQ(result, -ENOMEM);
+    EXPECT_EQ(g_async_callback_count.load(std::memory_order_acquire), 0u);
+    EXPECT_EQ(transport.dispatch_internal(&packet, len), UB_COMM_OK);
+    EXPECT_TRUE(WaitUntil(std::chrono::milliseconds(300),
+                          []() { return g_async_callback_count.load(std::memory_order_acquire) == 1; }));
+}
+
+TEST_F(UbCommQueueFaultTest, AsyncDispatchHandlesBodyCopyAllocationFailure)
+{
+    // 超过短字符串优化容量，第一次分配发生于 body_copy 构造。
+    CheckAsyncAllocationFailure(128);
+}
+
+TEST_F(UbCommQueueFaultTest, AsyncDispatchHandlesTaskAllocationFailure)
+{
+    // 空消息体无需分配，第一次分配发生于 enqueue 创建任务。
+    CheckAsyncAllocationFailure(0);
+}
+
 TEST(UbCommQueueApiTest, UBCQ_IF_RCV_EER_001_QueryDefaultHeartbeatConfig)
 {
     ApiEnv env(0);
@@ -400,6 +588,58 @@ TEST(UbCommQueueApiTest, UBCQ_IF_RCV_EER_002_SetHeartbeatConfigWithoutQuery)
     EXPECT_EQ(effective.timeout_ms, 10u);
 
     EXPECT_EQ(ub_comm_queue_deinit(&handle), UB_COMM_OK);
+}
+
+// 问题#13：拒绝超时窗口不足及乘二溢出边界，失败不得修改本地配置或公告牌。
+TEST(UbCommQueueApiTest, HeartbeatRejectsInvalidConfigWithoutSideEffects)
+{
+    Billboard board{};
+    UBShmTransport transport;
+    transport.init_region_ptr_ = reinterpret_cast<char *>(&board);
+    transport.node_id_to_idx_.emplace(0, 0);
+    ub_shm_comm_t handle = &transport;
+    const ub_comm_queue_heartbeat_config_t baseline{10, 5, 20};
+    ASSERT_EQ(ub_comm_queue_config_heartbeat(&handle, &baseline, nullptr), UB_COMM_OK);
+    const ub_comm_queue_heartbeat_config_t invalid[] = {
+        {25, 10, 19}, {25, UINT32_MAX / 2 + 1, UINT32_MAX}, {25, UINT32_MAX, UINT32_MAX}, {0, 5, 20}, {25, 0, 20},
+        {25, 5, 0},
+    };
+    for (const auto &request : invalid) {
+        SCOPED_TRACE(::testing::Message() << "heartbeat=" << request.heartbeat_interval_ms << " check="
+                                          << request.check_interval_ms << " timeout=" << request.timeout_ms);
+        ub_comm_queue_heartbeat_config_t effective{7, 8, 9};
+        EXPECT_EQ(ub_comm_queue_config_heartbeat(&handle, &request, &effective), -EINVAL);
+        EXPECT_EQ(effective.heartbeat_interval_ms, 7u);
+        EXPECT_EQ(effective.check_interval_ms, 8u);
+        EXPECT_EQ(effective.timeout_ms, 9u);
+        EXPECT_EQ(ub_comm_queue_config_heartbeat(&handle, nullptr, &effective), UB_COMM_OK);
+        EXPECT_EQ(effective.heartbeat_interval_ms, baseline.heartbeat_interval_ms);
+        EXPECT_EQ(effective.check_interval_ms, baseline.check_interval_ms);
+        EXPECT_EQ(effective.timeout_ms, baseline.timeout_ms);
+        EXPECT_EQ(board.nodes[0].heartbeat_interval_ms.load(std::memory_order_acquire), baseline.heartbeat_interval_ms);
+    }
+}
+
+TEST(UbCommQueueApiTest, HeartbeatAcceptsTimeoutBoundaryAndLargeValues)
+{
+    // 不启动后台线程，避免极大测试间隔造成析构等待。
+    UBShmTransport transport;
+    ub_shm_comm_t handle = &transport;
+    const ub_comm_queue_heartbeat_config_t valid[] = {
+        {1, 1, 2},
+        {10, 5, 10},
+        {10, 5, 11},
+        {UINT32_MAX, UINT32_MAX / 2, UINT32_MAX},
+    };
+    for (const auto &request : valid) {
+        ub_comm_queue_heartbeat_config_t effective{};
+        EXPECT_EQ(ub_comm_queue_config_heartbeat(&handle, &request, &effective), UB_COMM_OK);
+        EXPECT_EQ(effective.heartbeat_interval_ms, request.heartbeat_interval_ms);
+        EXPECT_EQ(effective.check_interval_ms, request.check_interval_ms);
+        EXPECT_EQ(effective.timeout_ms, request.timeout_ms);
+        EXPECT_EQ(transport.heartbeat_timeout_us_.load(std::memory_order_acquire),
+                  static_cast<uint64_t>(request.timeout_ms) * 1000ULL);
+    }
 }
 
 TEST(UbCommQueueApiTest, HeartbeatMonitorUsesPeerDeclaredIntervalBeforeTimingOut)

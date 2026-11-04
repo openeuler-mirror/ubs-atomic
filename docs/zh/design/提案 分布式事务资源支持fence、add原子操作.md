@@ -1,3 +1,5 @@
+# 分布式事务资源支持fence、add原子操作
+
 **状态 (Status):** Reviewing
 
 **作者 (Authors):** @davidhwang
@@ -304,17 +306,22 @@ public:
 - *接口描述*：统一内存屏障接口。根据 `order` 参数插入对应强度的编译器屏障和硬件屏障。所有变体均包含 compiler barrier（`"memory"` clobber），可阻止编译器寄存器缓存和跨点重排。
 - *接口原型*：`int ub_dist_tx_res_fence(ub_fence_order_t order);`
 - *输入/输出参数*：
+
   | 参数名称    | 输入/输出 | 类型                 | 描述   | 取值范围                                     |
   | ------- | ----- | ------------------ | ---- | ---------------------------------------- |
   | `order` | 输入    | `ub_fence_order_t` | 屏障语义 | `UB_FENCE_RELAXED` \~ `UB_FENCE_SEQ_CST` |
+
 - *返回参数*：
+
   | 参数名称 | 类型    | 描述   | 取值范围                                                |
   | ---- | ----- | ---- | --------------------------------------------------- |
   | 返回值  | `int` | 操作结果 | `UB_RES_OK`(0)：成功；`UB_RES_ERROR`(-1)：`order` 超出合法范围 |
+
 - *异常处理*：`order` 不在合法枚举范围时返回 `UB_RES_ERROR`，不执行任何屏障。
 - *约束说明*：线程安全（fence 仅约束调用线程自身的内存访问序）；幂等（连续多次调用等价于单次对应屏障）；`UB_FENCE_RELAXED` 仅生成编译器屏障，不产生硬件 fence 指令。
 - *变更说明*：新增接口。旧接口名 `ub_dist_tx_res_fence_acquire`/`release`/`acq_rel`/`seq_cst` 通过宏映射到本接口，已有代码无需修改。
 - *调用参考代码*：
+
   ```c
   /* 生产者-消费者：release + acquire 配对保证可见性 */
   ub_dist_tx_res_set(&data, 42);
@@ -332,18 +339,23 @@ public:
 - *接口描述*：对分布式事务资源执行原子加法（无 fetch 版本）。将 `value` 原子地加到 `handle` 指向的共享内存位置，不返回旧值。使用 `memory_order_release` 语义，适用于 `MPI_Accumulate(MPI_SUM)` 等仅需累加不需旧值的场景。
 - *接口原型*：`int ub_dist_tx_res_add(uint64_t *handle, uint64_t value);`
 - *输入/输出参数*：
+
   | 参数名称     | 输入/输出 | 类型           | 描述              | 取值范围                   |
   | -------- | ----- | ------------ | --------------- | ---------------------- |
   | `handle` | 输入    | `uint64_t *` | 指向目标共享内存位置的指针   | 非空，且 8 字节对齐            |
   | `value`  | 输入    | `uint64_t`   | 要累加的 64 位无符号整数值 | 任意 `uint64_t`，溢出按模算术回绕 |
+
 - *返回参数*：
+
   | 参数名称 | 类型    | 描述   | 取值范围                                                           |
   | ---- | ----- | ---- | -------------------------------------------------------------- |
   | 返回值  | `int` | 操作结果 | `UB_RES_OK`(0)：成功；`UB_RES_ERROR`(-1)：`handle` 为 NULL 或未 8 字节对齐 |
+
 - *异常处理*：`handle` 为 NULL 或未对齐时返回 `UB_RES_ERROR`，不执行原子操作，并输出 ERROR 级日志。
 - *约束说明*：与 `ub_dist_tx_res_fetch_add` 的区别——本接口不返回旧值，硬件可优化为更轻量指令（ARM64: `STADD` vs `LDADD`）；使用 `release` 语义（`fetch_add` 使用 `acq_rel`）。加法为 `uint64_t` 模算术，溢出回绕不产生错误。NC 场景下完成后如需保证远端可见性，应配合 `fence(UB_FENCE_RELEASE)`。
 - *变更说明*：新增接口。
 - *调用参考代码*：
+
   ```c
   uint64_t counter = 0;
   ub_dist_tx_res_init(&counter);
@@ -358,19 +370,24 @@ public:
 - *接口描述*：对分布式事务资源执行原子异或并返回旧值。将 `value` 与 `handle` 指向的共享内存位置原子地进行 XOR 操作，返回操作前的旧值。使用 `memory_order_acq_rel` 语义。
 - *接口原型*：`int ub_dist_tx_res_fetch_xor(uint64_t *handle, uint64_t value, uint64_t *out_val);`
 - *输入/输出参数*：
+
   | 参数名称      | 输入/输出 | 类型           | 描述              | 取值范围          |
   | --------- | ----- | ------------ | --------------- | ------------- |
   | `handle`  | 输入    | `uint64_t *` | 指向目标共享内存位置的指针   | 非空，且 8 字节对齐   |
   | `value`   | 输入    | `uint64_t`   | 要异或的 64 位无符号整数值 | 任意 `uint64_t` |
   | `out_val` | 输出    | `uint64_t *` | 输出异或前的旧值        | 非空            |
+
 - *返回参数*：
+
   | 参数名称 | 类型    | 描述   | 取值范围                                                                              |
   | ---- | ----- | ---- | --------------------------------------------------------------------------------- |
   | 返回值  | `int` | 操作结果 | `UB_RES_OK`(0)：成功并写入 `*out_val`；`UB_RES_ERROR`(-1)：`handle`/`out_val` 为 NULL 或未对齐 |
+
 - *异常处理*：`handle` 或 `out_val` 为 NULL，或 `handle` 未对齐时返回 `UB_RES_ERROR`，不执行原子操作。
 - *约束说明*：异或操作为按位 XOR，满足自反性 `a ^ b ^ b == a`，可用于无锁标志位翻转。使用 `acq_rel` 语义，同时具备 acquire 和 release 保证。
 - *变更说明*：新增接口。
 - *调用参考代码*：
+
   ```c
   uint64_t flags = 0;
   ub_dist_tx_res_init(&flags);
@@ -386,20 +403,25 @@ public:
 - *接口描述*：对分布式事务资源执行原子比较并交换（CAS）。如果 `handle` 指向的值等于 `*expected`，则原子地将其替换为 `desired`，返回成功；否则将当前值写入 `*expected`，返回失败。使用 `memory_order_acq_rel`（成功）/ `memory_order_acquire`（失败）语义。
 - *接口原型*：`int ub_dist_tx_res_compare_exchange(uint64_t *handle, uint64_t *expected, uint64_t desired, int *success);`
 - *输入/输出参数*：
+
   | 参数名称       | 输入/输出 | 类型           | 描述                | 取值范围          |
   | ---------- | ----- | ------------ | ----------------- | ------------- |
   | `handle`   | 输入    | `uint64_t *` | 指向目标共享内存位置的指针     | 非空，且 8 字节对齐   |
   | `expected` | 输入/输出 | `uint64_t *` | 输入为期望值，失败时输出当前实际值 | 非空            |
   | `desired`  | 输入    | `uint64_t`   | 期望匹配时要写入的新值       | 任意 `uint64_t` |
   | `success`  | 输出    | `int *`      | 输出 CAS 是否成功       | 非空；1=成功，0=失败  |
+
 - *返回参数*：
+
   | 参数名称 | 类型    | 描述     | 取值范围                                                                                    |
   | ---- | ----- | ------ | --------------------------------------------------------------------------------------- |
   | 返回值  | `int` | 函数调用结果 | `UB_RES_OK`(0)：调用成功（注意 `success` 表示 CAS 是否匹配，而非调用是否成功）；`UB_RES_ERROR`(-1)：参数为 NULL 或未对齐 |
+
 - *异常处理*：`handle`/`expected`/`success` 为 NULL 或 `handle` 未对齐时返回 `UB_RES_ERROR`，不执行原子操作。
 - *约束说明*：CAS 失败时 `*expected` 会被更新为当前实际值，调用方可据此重试。使用 `compare_exchange_strong` 语义，不会发生伪失败（spurious failure）。典型用法：自旋锁、无锁队列、状态机转换。
 - *变更说明*：新增接口。
 - *调用参考代码*：
+
   ```c
   /* CAS 自旋锁：抢锁 */
   uint64_t lock = 0;
@@ -481,4 +503,3 @@ public:
   - 本提案合入时同步更新 `doc/api/libubs-atomic.md` 第 4 章（新增 4.6/4.7/4.10/4.11/4.12 节，更新 4.13 样例）。
   - 同步更新 `doc/ub_dist_tx_res_design.md`（接口规格表、测试矩阵）。
   - 头文件 Doxygen 注释随实现合入，不单独输出手册。
-

@@ -64,7 +64,7 @@ bash build.sh test
 
 ## Architecture
 
-```
+```text
 src/
 ├── common/           # Shared utilities (log.h, util.h)
 ├── ub_lock/          # Distributed lock primitives

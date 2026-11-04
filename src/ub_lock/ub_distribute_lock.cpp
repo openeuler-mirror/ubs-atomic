@@ -4,6 +4,7 @@
 
 #include "inner_distribute_lock.h"
 
+#include <limits>
 #include <string>
 
 namespace ublock {
@@ -352,7 +353,10 @@ void reset_shared_lock_for_rebuild(ub_rw_lock_t *lock)
     }
 }
 
+// 正数仅表示已就绪的引用计数；两种初始化中状态均不得作为引用递增或递减。
 constexpr int32_t REBUILD_INIT_IN_PROGRESS = -1;
+constexpr int32_t CREATE_INIT_IN_PROGRESS = -2;
+constexpr uint32_t CREATE_INIT_WAIT_ROUNDS = 1024 * 1024;
 
 bool try_begin_shared_rebuild_init(ub_rw_lock_t *lock)
 {
@@ -400,15 +404,15 @@ std::shared_ptr<LocalLock> switch_local_lock_binding(ub_rw_lock_t *old_lock, ub_
         return new_it->second;
     }
 
-    std::shared_ptr<LocalLock> local_lock = std::move(old_it->second);
-    g_ll_registry.map.erase(old_it);
-    local_lock->ub_lock_ptr_ = new_lock;
-
+    std::shared_ptr<LocalLock> local_lock = old_it->second;
+    // 新登记可能分配失败；成功前保留旧绑定。插入可能 rehash，随后按 key 删除。
     if (new_it == g_ll_registry.map.end()) {
         g_ll_registry.map.emplace(new_lock, local_lock);
     } else {
         new_it->second = local_lock;
     }
+    g_ll_registry.map.erase(old_lock);
+    local_lock->ub_lock_ptr_ = new_lock;
     return local_lock;
 }
 
@@ -535,43 +539,73 @@ void DistributedLock::lock_create(const ub_lock_config_t &config, const ub_locat
         return;
     }
 
-    if (rw_lock_shm_->is_inited.fetch_add(1u, std::memory_order_acq_rel) > 0) {
-        ATOMIC_LOG(LOG_LEVEL_INFO, "UB lock is already init!");
-        std::shared_ptr<LocalLock> ll_sp = lookup_local_lock(rw_lock_shm_);
-        if (!ll_sp) {
-            ll_sp = std::make_shared<LocalLock>(rw_lock_shm_);
-            register_local_lock(rw_lock_shm_, ll_sp);
+    bool initialize = false;
+    uint32_t wait_rounds = 0;
+    int32_t state = rw_lock_shm_->is_inited.load(std::memory_order_acquire);
+    for (;;) {
+        if (state == CREATE_INIT_IN_PROGRESS) {
+            if (++wait_rounds >= CREATE_INIT_WAIT_ROUNDS) {
+                ATOMIC_LOG(LOG_LEVEL_ERROR, "lock create init wait exceeded: lock=%p node=%u state=%d",
+                           static_cast<void *>(rw_lock_shm_), location.node_id, state);
+                return;
+            }
+            cpu_relax();
+            state = rw_lock_shm_->is_inited.load(std::memory_order_acquire);
+            continue;
         }
-        rw_lock_shm_->node_registry[location.node_id] = reinterpret_cast<uintptr_t>(rw_lock_shm_);
-        register_message_process_func();
+        if (state < 0 || state == std::numeric_limits<int32_t>::max()) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "lock create rejected init state: lock=%p node=%u state=%d",
+                       static_cast<void *>(rw_lock_shm_), location.node_id, state);
+            return;
+        }
+        initialize = state == 0;
+        const int32_t next = initialize ? CREATE_INIT_IN_PROGRESS : state + 1;
+        if (rw_lock_shm_->is_inited.compare_exchange_weak(state, next, std::memory_order_acq_rel,
+                                                          std::memory_order_acquire)) {
+            break;
+        }
+    }
+
+    if (initialize) {
+        try {
+            std::memset(rw_lock_shm_->_pad_core, 0, sizeof(rw_lock_shm_->_pad_core));
+            std::memset(rw_lock_shm_->_pad_qt, 0, sizeof(rw_lock_shm_->_pad_qt));
+            std::memset(rw_lock_shm_->_pad_qh, 0, sizeof(rw_lock_shm_->_pad_qh));
+            std::memset(rw_lock_shm_->_pad_misc, 0, sizeof(rw_lock_shm_->_pad_misc));
+            rw_lock_shm_->lock_word.store(X_LOCK_DECR, std::memory_order_relaxed);
+            rw_lock_shm_->shared_owner_bitmap.store(0, std::memory_order_relaxed);
+            rw_lock_shm_->x_recursive.store(0, std::memory_order_relaxed);
+            rw_lock_shm_->sx_recursive.store(0, std::memory_order_relaxed);
+            rw_lock_shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_relaxed);
+            rw_lock_shm_->lock_owner_x.store(LOCK_INVALID_OWNER, std::memory_order_relaxed);
+            rw_lock_shm_->lock_owner_sx.store(LOCK_INVALID_OWNER, std::memory_order_relaxed);
+            create_wait_queue();
+            clear_node_registry_for_rebuild(rw_lock_shm_);
+            // 所有共享字段就绪后才发布首个引用；其他 create 的 acquire/CAS 与此配对。
+            rw_lock_shm_->is_inited.store(1, std::memory_order_release);
+        } catch (const std::exception &e) {
+            rw_lock_shm_->is_inited.store(0, std::memory_order_release);
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "lock create initialization failed: lock=%p node=%u error=%s",
+                       static_cast<void *>(rw_lock_shm_), location.node_id, e.what());
+            return;
+        }
+    }
+
+    try {
+        auto ll = lookup_local_lock(rw_lock_shm_);
+        if (!ll) {
+            ll = std::make_shared<LocalLock>(rw_lock_shm_);
+            register_local_lock(rw_lock_shm_, ll);
+        }
+    } catch (const std::exception &e) {
+        rw_lock_shm_->is_inited.fetch_sub(1, std::memory_order_acq_rel);
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "lock create registration failed: lock=%p node=%u error=%s",
+                   static_cast<void *>(rw_lock_shm_), location.node_id, e.what());
         return;
     }
-
-    std::memset(rw_lock_shm_->_pad_core, 0, sizeof(rw_lock_shm_->_pad_core));
-    std::memset(rw_lock_shm_->_pad_qt, 0, sizeof(rw_lock_shm_->_pad_qt));
-    std::memset(rw_lock_shm_->_pad_qh, 0, sizeof(rw_lock_shm_->_pad_qh));
-    std::memset(rw_lock_shm_->_pad_misc, 0, sizeof(rw_lock_shm_->_pad_misc));
-    rw_lock_shm_->lock_word.store(X_LOCK_DECR, std::memory_order_release);
-    rw_lock_shm_->shared_owner_bitmap.store(0, std::memory_order_release);
-    rw_lock_shm_->x_recursive.store(0, std::memory_order_release);
-    rw_lock_shm_->sx_recursive.store(0, std::memory_order_release);
-
-    rw_lock_shm_->reserve_lock_owner.store(LOCK_INVALID_OWNER, std::memory_order_release);
-    rw_lock_shm_->lock_owner_x.store(LOCK_INVALID_OWNER, std::memory_order_release);
-    rw_lock_shm_->lock_owner_sx.store(LOCK_INVALID_OWNER, std::memory_order_release);
-
-    create_wait_queue();
-
-    auto ll = std::make_shared<LocalLock>(rw_lock_shm_);
-    register_local_lock(rw_lock_shm_, ll);
-    for (uint32_t i = 0; i < UB_MAX_NODES; ++i) {
-        rw_lock_shm_->node_registry[i] = 0;
-    }
     rw_lock_shm_->node_registry[location.node_id] = reinterpret_cast<uintptr_t>(rw_lock_shm_);
-
     register_message_process_func();
     ATOMIC_LOG(LOG_LEVEL_INFO, "UB lock create success!");
-    return;
 }
 
 void DistributedLock::lock_free(const ub_location_t &location)
@@ -580,12 +614,17 @@ void DistributedLock::lock_free(const ub_location_t &location)
         ATOMIC_LOG(LOG_LEVEL_ERROR, "invalid node_id [0, %d) : location.node_id=%d", UB_MAX_NODES, location.node_id);
         return;
     }
+    int32_t cur = rw_lock_shm_->is_inited.load(std::memory_order_acquire);
+    if (cur < 0) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "lock free rejected init state: lock=%p node=%u state=%d",
+                   static_cast<void *>(rw_lock_shm_), location.node_id, cur);
+        return;
+    }
     rw_lock_shm_->node_registry[location.node_id] = 0;
     auto ll = unregister_local_lock(rw_lock_shm_);
 
-    int32_t cur = rw_lock_shm_->is_inited.load(std::memory_order_acquire);
-    while (cur > 0u) {
-        if (rw_lock_shm_->is_inited.compare_exchange_weak(cur, cur - 1u, std::memory_order_acq_rel,
+    while (cur > 0) {
+        if (rw_lock_shm_->is_inited.compare_exchange_weak(cur, cur - 1, std::memory_order_acq_rel,
                                                           std::memory_order_acquire)) {
             break;
         }
@@ -828,6 +867,15 @@ ub_lock_result_t DistributedLock::unlock_s(const ub_lock_policy_t &policy, const
         return UB_LOCK_ERROR;
     }
     LocalLock *local_lock = ll_sp.get();
+    // 只读校验既有分桶状态；全局释放完成前保留本地读锁，避免提前放行本地 X 等待者。
+    const uint64_t local_state = local_lock->lock_word.load(std::memory_order_acquire);
+    const uint16_t lane = local_lock_lane_value(local_state, local_lock_lane_for_tid(location.tid));
+    if (__builtin_expect((lane & LOCAL_LOCK_READER_SENTINEL) != 0 || (lane & LOCAL_LOCK_READER_COUNT_MASK) == 0, 0)) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "S unlock rejected: invalid reader lane, lock=%p node=%u tid=%d state=0x%llx",
+                   static_cast<void *>(rw_lock_shm_), location.node_id, location.tid,
+                   static_cast<unsigned long long>(local_state));
+        return UB_LOCK_ERROR;
+    }
     ub_lock_result_t ret;
     int32_t old_ref = local_lock->global_read_ref_count_.fetch_sub(1, std::memory_order_acq_rel);
     if (old_ref > 1) {
@@ -1347,47 +1395,69 @@ ub_lock_result_t DistributedLock::rebuild(ub_rw_lock_t *old_lock, const ub_lock_
     const bool do_shared_init = try_begin_shared_rebuild_init(rw_lock_shm_);
     if (!do_shared_init) {
         wait_shared_rebuild_init_done(rw_lock_shm_);
+        const int32_t state = rw_lock_shm_->is_inited.load(std::memory_order_acquire);
+        if (state <= 0) {
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "lock rebuild target not ready: lock=%p node=%u state=%d",
+                       static_cast<void *>(rw_lock_shm_), local_node_id, state);
+            return UB_LOCK_ERROR;
+        }
     }
 
-    std::shared_ptr<LocalLock> ll = switch_local_lock_binding(old_lock, rw_lock_shm_);
-    if (!ll) {
-        ATOMIC_LOG(LOG_LEVEL_ERROR, "missing local lock binding during rebuild");
-        return UB_LOCK_ERROR;
-    }
-    if (do_shared_init) {
-        clear_node_registry_for_rebuild(rw_lock_shm_);
-        reset_shared_lock_for_rebuild(rw_lock_shm_);
+    try {
+        if (do_shared_init) {
+            clear_node_registry_for_rebuild(rw_lock_shm_);
+            reset_shared_lock_for_rebuild(rw_lock_shm_);
 
-        if (x_holder != nullptr) {
-            rw_lock_shm_->lock_word.store(0, std::memory_order_release);
-            rw_lock_shm_->lock_owner_x.store(make_global_owner(x_holder->node_id, x_holder->holder_tid),
-                                             std::memory_order_release);
-            rw_lock_shm_->x_recursive.store(x_holder->recursive_count, std::memory_order_release);
-        } else if (sx_holder != nullptr) {
-            rw_lock_shm_->lock_word.store(static_cast<int32_t>(X_LOCK_HALF_DECR - shared_count),
-                                          std::memory_order_release);
-            rw_lock_shm_->lock_owner_sx.store(make_global_owner(sx_holder->node_id, sx_holder->holder_tid),
+            if (x_holder != nullptr) {
+                rw_lock_shm_->lock_word.store(0, std::memory_order_release);
+                rw_lock_shm_->lock_owner_x.store(make_global_owner(x_holder->node_id, x_holder->holder_tid),
+                                                 std::memory_order_release);
+                rw_lock_shm_->x_recursive.store(x_holder->recursive_count, std::memory_order_release);
+            } else if (sx_holder != nullptr) {
+                rw_lock_shm_->lock_word.store(static_cast<int32_t>(X_LOCK_HALF_DECR - shared_count),
                                               std::memory_order_release);
-            rw_lock_shm_->sx_recursive.store(sx_holder->recursive_count, std::memory_order_release);
-        } else if (shared_count > 0u) {
-            rw_lock_shm_->lock_word.store(static_cast<int32_t>(X_LOCK_DECR - shared_count), std::memory_order_release);
+                rw_lock_shm_->lock_owner_sx.store(make_global_owner(sx_holder->node_id, sx_holder->holder_tid),
+                                                  std::memory_order_release);
+                rw_lock_shm_->sx_recursive.store(sx_holder->recursive_count, std::memory_order_release);
+            } else if (shared_count > 0u) {
+                rw_lock_shm_->lock_word.store(static_cast<int32_t>(X_LOCK_DECR - shared_count),
+                                              std::memory_order_release);
+            }
+
+            if (reserve_entry != nullptr) {
+                // 延迟令牌保留节点路由信息，但不属于执行恢复的线程。
+                replay_delayed_release_state(rw_lock_shm_, reserve_entry, shared_bitmap, shared_count, sx_holder,
+                                             make_global_owner(reserve_entry->node_id, 0));
+                ATOMIC_LOG(LOG_LEVEL_INFO, "rebuild delayed token: lock=%p node=%u reserve_mode=%d",
+                           static_cast<void *>(rw_lock_shm_), reserve_entry->node_id, reserve_entry->reserve_mode);
+            }
+            rw_lock_shm_->shared_owner_bitmap.store(shared_bitmap, std::memory_order_release);
         }
 
-        if (reserve_entry != nullptr) {
-            replay_delayed_release_state(rw_lock_shm_, reserve_entry, shared_bitmap, shared_count, sx_holder,
-                                         make_global_owner(reserve_entry->node_id, location.tid));
+        std::shared_ptr<LocalLock> ll = switch_local_lock_binding(old_lock, rw_lock_shm_);
+        if (!ll) {
+            if (do_shared_init) {
+                rw_lock_shm_->is_inited.store(0, std::memory_order_release);
+            }
+            ATOMIC_LOG(LOG_LEVEL_ERROR, "missing local lock binding during rebuild: lock=%p node=%u",
+                       static_cast<void *>(rw_lock_shm_), local_node_id);
+            return UB_LOCK_ERROR;
         }
-        rw_lock_shm_->shared_owner_bitmap.store(shared_bitmap, std::memory_order_release);
-
         rw_lock_shm_->node_registry[local_node_id] = reinterpret_cast<uintptr_t>(rw_lock_shm_);
         register_message_process_func();
-        rw_lock_shm_->is_inited.store(static_cast<int32_t>(rebuild_info.query_result_count), std::memory_order_release);
+        if (do_shared_init) {
+            rw_lock_shm_->is_inited.store(static_cast<int32_t>(rebuild_info.query_result_count),
+                                          std::memory_order_release);
+        }
         return UB_LOCK_SUCCESS;
+    } catch (const std::exception &e) {
+        if (do_shared_init) {
+            rw_lock_shm_->is_inited.store(0, std::memory_order_release);
+        }
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "lock rebuild initialization failed: lock=%p node=%u error=%s",
+                   static_cast<void *>(rw_lock_shm_), local_node_id, e.what());
+        return UB_LOCK_ERROR;
     }
-
-    rw_lock_shm_->node_registry[local_node_id] = reinterpret_cast<uintptr_t>(rw_lock_shm_);
-    register_message_process_func();
-    return UB_LOCK_SUCCESS;
 }
 
 static inline uint32_t parse_owner_pid(uint64_t owner)
@@ -1528,6 +1598,7 @@ void DistributedLock::recover_shared_lock(uint32_t process_id)
     }
 }
 
+// 以下恢复路径依赖调用方停止并发加解锁；无 owner 的锁字可能是故障进程留下的半写状态，仍需清理。
 void DistributedLock::recover_exclusive_x(uint32_t process_id)
 {
     uint64_t owner = LOCK_INVALID_OWNER;
@@ -1591,6 +1662,12 @@ ub_lock_result_t DistributedLock::recover(const uint32_t process_id, const ub_lo
         ATOMIC_LOG(LOG_LEVEL_WARN, "invalid process_id=%d, valid range [0, %d).", process_id, UB_MAX_NODES);
         return UB_LOCK_ERROR;
     }
+    const int32_t init_state = rw_lock_shm_->is_inited.load(std::memory_order_acquire);
+    if (init_state < 0) {
+        ATOMIC_LOG(LOG_LEVEL_ERROR, "lock recover rejected init state: lock=%p node=%u state=%d",
+                   static_cast<void *>(rw_lock_shm_), location.node_id, init_state);
+        return UB_LOCK_ERROR;
+    }
     int32_t cur = rw_lock_shm_->lock_word.load(std::memory_order_acquire);
     if (cur == 0) {
         recover_exclusive_x(process_id);
@@ -1623,8 +1700,8 @@ ub_lock_result_t DistributedLock::recover(const uint32_t process_id, const ub_lo
     }
 
     cur = rw_lock_shm_->is_inited.load(std::memory_order_acquire);
-    while (cur > 1u) {
-        if (rw_lock_shm_->is_inited.compare_exchange_weak(cur, cur - 1u, std::memory_order_acq_rel,
+    while (cur > 1) {
+        if (rw_lock_shm_->is_inited.compare_exchange_weak(cur, cur - 1, std::memory_order_acq_rel,
                                                           std::memory_order_acquire)) {
             break;
         }

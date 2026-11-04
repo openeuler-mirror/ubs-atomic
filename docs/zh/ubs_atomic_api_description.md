@@ -4,15 +4,15 @@
 
 ubs-atomic 对外提供 C ABI 接口，当前对外能力包括：
 
-- 分布式读写锁（S/SX/X 模式）、分布式互斥锁、分布式自旋锁
-- 分布式共享内存通信队列
-- 分布式事务资源原子操作（含内存屏障）
+- 分布式读写锁（S/SX/X 模式）、分布式互斥锁、分布式自旋锁。
+- 分布式共享内存通信队列。
+- 分布式事务资源原子操作（含内存屏障）。
 
 ### 头文件列表
 
-开发代码时所需的头文件如[表 1](#表-1-头文件列表)所示。
+开发代码时所需的头文件如[表 1](#table01)所示。
 
-**表 1** 头文件列表
+**表 1 <a id='table01'></a>** 头文件列表
 
 | 头文件名称 | 用途 |
 | --------------- | ------------------ |
@@ -59,7 +59,7 @@ ubs-atomic 对外提供 C ABI 接口，当前对外能力包括：
 
 **接口格式**
 
-```
+```C
 void ub_atomic_register_log_func(ub_atomic_log_func func);
 ```
 
@@ -81,7 +81,7 @@ void ub_atomic_register_log_func(ub_atomic_log_func func);
 
 **接口格式**
 
-```
+```C
 int ub_atomic_set_log_level(int level);
 ```
 
@@ -108,7 +108,7 @@ int ub_atomic_set_log_level(int level);
 
 **接口格式**
 
-```
+```C
 void ub_rw_lock_create(ub_rw_lock_t *lock, const ub_lock_config_t *config, const ub_location_t *location);
 ```
 
@@ -117,7 +117,7 @@ void ub_rw_lock_create(ub_rw_lock_t *lock, const ub_lock_config_t *config, const
 | 参数名 | 数据类型 | 参数类型 | 描述 |
 | ----------------- | --------------------- | ---- | ------------ |
 | lock | ub_rw_lock_t \* | 入参 | 共享内存锁对象地址，需指向至少 `UB_RW_LOCK_SIZE`（640 字节）的共享内存。 |
-| config | const ub_lock_config_t \* | 入参 | 锁配置（租约时间、心跳超时），字段说明参见[配置说明](configuration_instructions.md)。 |
+| config | const ub_lock_config_t \* | 入参 | 锁配置（租约时间、心跳超时），字段说明参见[配置说明](ubs_atomic_configuration_instructions.md)。 |
 | location | const ub_location_t \* | 入参 | 调用者位置（节点 ID + 线程 ID）。 |
 
 **返回值**
@@ -132,7 +132,7 @@ void ub_rw_lock_create(ub_rw_lock_t *lock, const ub_lock_config_t *config, const
 
 **接口格式**
 
-```
+```C
 void ub_rw_lock_free(ub_rw_lock_t *lock, const ub_location_t *location);
 ```
 
@@ -155,7 +155,7 @@ void ub_rw_lock_free(ub_rw_lock_t *lock, const ub_location_t *location);
 
 **接口格式**
 
-```
+```C
 ub_lock_result_t ub_rw_lock_s_lock(ub_rw_lock_t *lock, const ub_lock_policy_t *policy, const ub_location_t *location);
 ub_lock_result_t ub_rw_lock_x_lock(ub_rw_lock_t *lock, const ub_lock_policy_t *policy, const ub_location_t *location);
 ub_lock_result_t ub_rw_lock_sx_lock(ub_rw_lock_t *lock, const ub_lock_policy_t *policy, const ub_location_t *location);
@@ -185,7 +185,7 @@ ub_lock_result_t ub_rw_lock_sx_lock(ub_rw_lock_t *lock, const ub_lock_policy_t *
 
 **接口格式**
 
-```
+```C
 ub_lock_result_t ub_rw_lock_s_unlock(ub_rw_lock_t *lock, const ub_lock_policy_t *policy, const ub_location_t *location);
 ub_lock_result_t ub_rw_lock_x_unlock(ub_rw_lock_t *lock, const ub_lock_policy_t *policy, const ub_location_t *location);
 ub_lock_result_t ub_rw_lock_sx_unlock(ub_rw_lock_t *lock, const ub_lock_policy_t *policy, const ub_location_t *location);
@@ -214,7 +214,7 @@ ub_lock_result_t ub_rw_lock_sx_unlock(ub_rw_lock_t *lock, const ub_lock_policy_t
 
 **接口格式**
 
-```
+```C
 ub_lock_result_t ub_rw_lock_recover(ub_rw_lock_t *lock, const uint32_t process_id, const ub_location_t *location);
 ```
 
@@ -241,7 +241,7 @@ ub_lock_result_t ub_rw_lock_recover(ub_rw_lock_t *lock, const uint32_t process_i
 
 **接口格式**
 
-```
+```C
 ub_lock_result_t ub_rw_lock_query_holder(ub_rw_lock_t *lock, const ub_location_t *location, ub_lock_query_result_t *result);
 ```
 
@@ -268,7 +268,7 @@ ub_lock_result_t ub_rw_lock_query_holder(ub_rw_lock_t *lock, const ub_location_t
 
 **接口格式**
 
-```
+```C
 ub_lock_result_t ub_rw_lock_rebuild(ub_rw_lock_t *old_lock, ub_rw_lock_t *new_lock, const ub_lock_rebuild_info_t *rebuild_info, const ub_location_t *location);
 ```
 
@@ -298,7 +298,7 @@ ub_lock_result_t ub_rw_lock_rebuild(ub_rw_lock_t *old_lock, ub_rw_lock_t *new_lo
 
 **接口格式**
 
-```
+```C
 void ub_mutex_lock_create(ub_mutex_lock_t *lock);
 ```
 
@@ -320,7 +320,7 @@ void ub_mutex_lock_create(ub_mutex_lock_t *lock);
 
 **接口格式**
 
-```
+```C
 void ub_mutex_lock_free(ub_mutex_lock_t *lock);
 ```
 
@@ -342,7 +342,7 @@ void ub_mutex_lock_free(ub_mutex_lock_t *lock);
 
 **接口格式**
 
-```
+```C
 ub_lock_result_t ub_mutex_lock(ub_mutex_lock_t *lock, time_ms_t timeout_ms, const ub_location_t *location);
 ```
 
@@ -351,7 +351,7 @@ ub_lock_result_t ub_mutex_lock(ub_mutex_lock_t *lock, time_ms_t timeout_ms, cons
 | 参数名 | 数据类型 | 参数类型 | 描述 |
 | ----------------- | --------------------- | ---- | ------------ |
 | lock | ub_mutex_lock_t \* | 入参 | 共享内存互斥锁对象地址，且已初始化。 |
-| timeout_ms | time_ms_t | 入参 | 超时时间，单位毫秒；0 表示使用默认值 10000ms。 |
+| timeout_ms | time_ms_t | 入参 | 超时时间，单位 ms；0 表示使用默认值 10000ms。 |
 | location | const ub_location_t \* | 入参 | 调用者位置。 |
 
 **返回值**
@@ -370,7 +370,7 @@ ub_lock_result_t ub_mutex_lock(ub_mutex_lock_t *lock, time_ms_t timeout_ms, cons
 
 **接口格式**
 
-```
+```C
 ub_lock_result_t ub_mutex_unlock(ub_mutex_lock_t *lock, const ub_location_t *location);
 ```
 
@@ -398,7 +398,7 @@ ub_lock_result_t ub_mutex_unlock(ub_mutex_lock_t *lock, const ub_location_t *loc
 
 **接口格式**
 
-```
+```C
 void ub_spin_lock_init(ub_spin_lock_t *lock);
 ```
 
@@ -420,7 +420,7 @@ void ub_spin_lock_init(ub_spin_lock_t *lock);
 
 **接口格式**
 
-```
+```C
 ub_lock_result_t ub_spin_lock(ub_spin_lock_t *lock, time_ms_t timeout_ms, const ub_location_t *location);
 ```
 
@@ -429,7 +429,7 @@ ub_lock_result_t ub_spin_lock(ub_spin_lock_t *lock, time_ms_t timeout_ms, const 
 | 参数名 | 数据类型 | 参数类型 | 描述 |
 | ----------------- | --------------------- | ---- | ------------ |
 | lock | ub_spin_lock_t \* | 入参 | 共享内存自旋锁对象地址，且已初始化。 |
-| timeout_ms | time_ms_t | 入参 | 超时时间，单位毫秒；0 表示使用默认值 10000ms。 |
+| timeout_ms | time_ms_t | 入参 | 超时时间，单位 ms；0 表示使用默认值 10000ms。 |
 | location | const ub_location_t \* | 入参 | 调用者位置。 |
 
 **返回值**
@@ -448,7 +448,7 @@ ub_lock_result_t ub_spin_lock(ub_spin_lock_t *lock, time_ms_t timeout_ms, const 
 
 **接口格式**
 
-```
+```C
 ub_lock_result_t ub_spin_unlock(ub_spin_lock_t *lock, const ub_location_t *location);
 ```
 
@@ -476,7 +476,7 @@ ub_lock_result_t ub_spin_unlock(ub_spin_lock_t *lock, const ub_location_t *locat
 
 **接口格式**
 
-```
+```C
 int ub_comm_queue_init(ub_shm_comm_t *handle, ub_shm_area_t *init_region, ub_ring_region_map_t *ring_regions, ub_comm_conf_t *conf);
 ```
 
@@ -487,7 +487,7 @@ int ub_comm_queue_init(ub_shm_comm_t *handle, ub_shm_area_t *init_region, ub_rin
 | handle | ub_shm_comm_t \* | 出参 | 输出通信实例句柄。 |
 | init_region | ub_shm_area_t \* | 入参 | 全局初始化公告牌共享内存区域，`size` 需足够容纳内部公告牌（建议不小于 4096 字节）。 |
 | ring_regions | ub_ring_region_map_t \* | 入参 | 所有节点 Ring 区域映射数组，各节点看到的数组内容和顺序应保持一致。 |
-| conf | ub_comm_conf_t \* | 入参 | 当前节点通信配置（绑核 CPU、节点数、Ring 配置等），字段说明参见[配置说明](configuration_instructions.md)。 |
+| conf | ub_comm_conf_t \* | 入参 | 当前节点通信配置（绑核 CPU、节点数、Ring 配置等），字段说明参见[配置说明](ubs_atomic_configuration_instructions.md)。 |
 
 **返回值**
 
@@ -496,11 +496,11 @@ int ub_comm_queue_init(ub_shm_comm_t *handle, ub_shm_area_t *init_region, ub_rin
 | 0 | 操作成功。 |
 | 负数错误码 | 参数错误（如 -EINVAL）、内存不足（-ENOMEM）等。 |
 
-说明：
-
-- 第一个初始化成功的通信实例会被内部标记为分布式锁使用的实例。
-- 集群最大节点数为 16；`priority` 取值 0~7，其中 0 为内部保留，业务 Ring 配置不得使用。
-- 初始化成功后必须调用 `ub_comm_queue_deinit` 释放实例。
+> [!NOTE] 说明
+>
+> - 第一个初始化成功的通信实例会被内部标记为分布式锁使用的实例。
+> - 集群最大节点数为 16；`priority` 取值 0~7，其中 0 为内部保留，业务 Ring 配置不得使用。
+> - 初始化成功后必须调用 `ub_comm_queue_deinit` 释放实例。
 
 #### ub_comm_queue_deinit
 
@@ -510,7 +510,7 @@ int ub_comm_queue_init(ub_shm_comm_t *handle, ub_shm_area_t *init_region, ub_rin
 
 **接口格式**
 
-```
+```C
 int ub_comm_queue_deinit(ub_shm_comm_t *handle);
 ```
 
@@ -535,7 +535,7 @@ int ub_comm_queue_deinit(ub_shm_comm_t *handle);
 
 **接口格式**
 
-```
+```C
 int ub_comm_queue_send(ub_shm_comm_t *handle, const message_t *msg);
 ```
 
@@ -562,7 +562,7 @@ int ub_comm_queue_send(ub_shm_comm_t *handle, const message_t *msg);
 
 **接口格式**
 
-```
+```C
 int ub_comm_queue_recv(ub_shm_comm_t *handle, void *buffer, uint32_t length);
 ```
 
@@ -589,7 +589,7 @@ int ub_comm_queue_recv(ub_shm_comm_t *handle, void *buffer, uint32_t length);
 
 **接口格式**
 
-```
+```C
 int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t priority, ub_comm_queue_status_t *status);
 ```
 
@@ -599,7 +599,7 @@ int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t pri
 | ----------------- | --------------------- | ---- | ------------ |
 | handle | ub_shm_comm_t \* | 入参 | 通信实例句柄。 |
 | node_id | uint8_t | 入参 | 待查询节点 ID，必须存在于当前节点映射表。 |
-| priority | uint8_t | 入参 | 待查询 Ring 优先级，取值 0~7。 |
+| priority | uint8_t | 入参 | 待查询 Ring 优先级，取值 1~7。 |
 | status | ub_comm_queue_status_t \* | 出参 | 输出状态快照（used/total/free、队列状态、拥塞阈值、最大深度等）。 |
 
 **返回值**
@@ -609,7 +609,8 @@ int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t pri
 | 0 | 操作成功。 |
 | 负数错误码 | Ring 不存在、节点未就绪、参数错误等。 |
 
-说明：返回的是原子快照，适合维测和流控估计，不提供强一致队列长度语义。
+> [!NOTE] 说明
+> 返回的是原子快照，适合维测和流控估计，不提供强一致队列长度语义。
 
 #### ub_comm_queue_set_congestion_threshold
 
@@ -619,7 +620,7 @@ int ub_comm_queue_get_status(ub_shm_comm_t *handle, uint8_t node_id, uint8_t pri
 
 **接口格式**
 
-```
+```C
 int ub_comm_queue_set_congestion_threshold(ub_shm_comm_t *handle, uint8_t priority, uint32_t congestion_threshold_percent);
 ```
 
@@ -646,7 +647,7 @@ int ub_comm_queue_set_congestion_threshold(ub_shm_comm_t *handle, uint8_t priori
 
 **接口格式**
 
-```
+```C
 int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle, const ub_comm_queue_heartbeat_config_t *request, ub_comm_queue_heartbeat_config_t *effective);
 ```
 
@@ -665,7 +666,8 @@ int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle, const ub_comm_queue_he
 | 0 | 操作成功。 |
 | 负数错误码 | 参数错误等。 |
 
-说明：本节点观察某个 peer 的实际超时窗口为 `max(timeout_ms, peer heartbeat_interval_ms * 3, check_interval_ms * 2)`，用于避免节点间心跳配置不一致导致误判。
+> [!NOTE] 说明
+> 本节点观察某个 peer 的实际超时窗口为 `max(timeout_ms, peer heartbeat_interval_ms * 3, check_interval_ms * 2)`，用于避免节点间心跳配置不一致导致误判。
 
 #### ub_comm_queue_check_ready
 
@@ -675,7 +677,7 @@ int ub_comm_queue_config_heartbeat(ub_shm_comm_t *handle, const ub_comm_queue_he
 
 **接口格式**
 
-```
+```C
 bool ub_comm_queue_check_ready(ub_shm_comm_t *handle, const uint8_t node_id);
 ```
 
@@ -701,7 +703,7 @@ bool ub_comm_queue_check_ready(ub_shm_comm_t *handle, const uint8_t node_id);
 
 **接口格式**
 
-```
+```C
 int ub_comm_queue_register_process_func(ub_shm_comm_t *handle, uint8_t msg_type, ub_func_type_t func_type, ub_callback_t func, void *ctx);
 ```
 
@@ -722,7 +724,8 @@ int ub_comm_queue_register_process_func(ub_shm_comm_t *handle, uint8_t msg_type,
 | 0 | 操作成功。 |
 | 负数错误码 | 参数错误等。 |
 
-说明：同一个 `msg_type` 重复注册会覆盖旧回调；已被分发线程取出或已投递线程池的消息可能仍使用旧回调执行。
+> [!NOTE] 说明
+> 同一个 `msg_type` 重复注册会覆盖旧回调；已被分发线程取出或已投递线程池的消息可能仍使用旧回调执行。
 
 ### 分布式事务资源
 
@@ -734,7 +737,7 @@ int ub_comm_queue_register_process_func(ub_shm_comm_t *handle, uint8_t msg_type,
 
 **接口格式**
 
-```
+```C
 int ub_dist_tx_res_init(uint64_t *handle);
 ```
 
@@ -759,7 +762,7 @@ int ub_dist_tx_res_init(uint64_t *handle);
 
 **接口格式**
 
-```
+```C
 int ub_dist_tx_res_set(uint64_t *handle, uint64_t value);
 ```
 
@@ -785,7 +788,7 @@ int ub_dist_tx_res_set(uint64_t *handle, uint64_t value);
 
 **接口格式**
 
-```
+```C
 int ub_dist_tx_res_get(uint64_t *handle, uint64_t *out_val);
 ```
 
@@ -811,7 +814,7 @@ int ub_dist_tx_res_get(uint64_t *handle, uint64_t *out_val);
 
 **接口格式**
 
-```
+```C
 int ub_dist_tx_res_fetch_add(uint64_t *handle, uint64_t value, uint64_t *out_val);
 ```
 
@@ -838,7 +841,7 @@ int ub_dist_tx_res_fetch_add(uint64_t *handle, uint64_t value, uint64_t *out_val
 
 **接口格式**
 
-```
+```C
 int ub_dist_tx_res_add(uint64_t *handle, uint64_t value);
 ```
 
@@ -864,7 +867,7 @@ int ub_dist_tx_res_add(uint64_t *handle, uint64_t value);
 
 **接口格式**
 
-```
+```C
 int ub_dist_tx_res_fetch_xor(uint64_t *handle, uint64_t value, uint64_t *out_val);
 ```
 
@@ -891,7 +894,7 @@ int ub_dist_tx_res_fetch_xor(uint64_t *handle, uint64_t value, uint64_t *out_val
 
 **接口格式**
 
-```
+```C
 int ub_dist_tx_res_compare_exchange(uint64_t *handle, uint64_t *expected, uint64_t desired, int *success);
 ```
 
@@ -919,7 +922,7 @@ int ub_dist_tx_res_compare_exchange(uint64_t *handle, uint64_t *expected, uint64
 
 **接口格式**
 
-```
+```C
 int ub_dist_tx_res_fence(ub_fence_order_t order);
 ```
 
