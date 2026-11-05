@@ -149,7 +149,7 @@ jobs:
       - name: Run OpenLibing SCA
         uses: openlibing/sca-action/sca-pr-action@v1.0.1
         with:
-          project-name: ubs-atomic
+          project-name: openEuler
           platform-domain: https://gitcode.com
 
   check_anti_poisoning:
@@ -170,7 +170,7 @@ jobs:
         with:
           repository-name: ${{ env.REPO_FULL_NAME }}
           pr-id: ${{ env.PR_ID }}
-          project-name: ubs-atomic
+          project-name: openEuler
 
   validation:
     name: Build and test
