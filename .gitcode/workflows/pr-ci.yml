@@ -222,8 +222,8 @@ stages:
               name: ci-result-aarch64
               path: .ci-results/aarch64
 
-      dt:
-        name: DT
+      ut:
+        name: UT
         runs-on: [self-hosted, ubse, arm, cpu=8]
         timeout-minutes: 10
         container:
