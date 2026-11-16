@@ -236,12 +236,12 @@ stages:
               ref: ${{ inputs.merge_commit_sha }}
               allow-unsafe-pr-checkout: true
 
-          - name: Preserve legacy DT status
+          - name: Preserve legacy UT status
             run: |
               set -euxo pipefail
-              echo "上游 atomic DT Jenkins Job 仅执行 PR checkout/merge。"
+              echo "上游 atomic UT Jenkins Job 仅执行 PR checkout/merge。"
               echo "实际 ubs_atomic_ut 已在 build-aarch64 中执行。"
-              echo "DT=PRECHECK_ONLY" >> "${ATOMGIT_STEP_SUMMARY}"
+              echo "UT=PRECHECK_ONLY" >> "${ATOMGIT_STEP_SUMMARY}"
 
           - name: Save result
             if: ${{ always() }}
@@ -250,14 +250,14 @@ stages:
             run: |
               mkdir -p .ci-results
               if [[ "${CURRENT_JOB_STATUS}" == "success" ]]; then
-                echo "SUCCESS" > .ci-results/DT
+                echo "SUCCESS" > .ci-results/UT
               else
-                echo "FAILED" > .ci-results/DT
+                echo "FAILED" > .ci-results/UT
               fi
 
           - name: Upload result
             if: ${{ always() }}
             uses: upload-artifact
             with:
-              name: ci-result-dt
-              path: .ci-results/DT
+              name: ci-result-ut
+              path: .ci-results/UT
