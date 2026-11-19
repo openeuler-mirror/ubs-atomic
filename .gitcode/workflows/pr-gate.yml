@@ -1,4 +1,4 @@
-name: UBS-atomic-PR
+name: PR-pipeline_atomic
 
 on:
   pull_request_target:
@@ -140,7 +140,7 @@ jobs:
           exit 1
 
   check_sca:
-    name: check_sca
+    name: SCA_atomic
     needs: [mark_running]
     runs-on: [self-hosted, ubse, x86, cpu=4]
     timeout-minutes: 30
@@ -153,7 +153,7 @@ jobs:
           platform-domain: https://gitcode.com
 
   check_anti_poisoning:
-    name: check_anti_poisoning
+    name: Antipoison_main
     needs: [mark_running]
     runs-on: [self-hosted, ubse, x86, cpu=4]
     timeout-minutes: 15
@@ -236,7 +236,7 @@ jobs:
           fi
 
           runs_json="$(
-            api_get "${api_root}/api/v8/repos/${REPO_FULL_NAME}/actions/runs?workflow_name=UBS-atomic-PR&per_page=100&page=1"
+            api_get "${api_root}/api/v8/repos/${REPO_FULL_NAME}/actions/runs?workflow_name=PR-pipeline_atomic&per_page=100&page=1"
           )"
 
           latest_run_number="$(
