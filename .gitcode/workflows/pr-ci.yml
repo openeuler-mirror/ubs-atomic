@@ -1,4 +1,4 @@
-name: UBS-atomic-Validation
+name: PR-pipeline_atomic_1
 
 on:
   workflow_call:
@@ -103,7 +103,7 @@ stages:
               path: .ci-results/pre-commit
 
       build_x86_64:
-        name: build-x86-64
+        name: Build_x86-64
         runs-on: [self-hosted, ubse, x86, cpu=8]
         timeout-minutes: 5
 
@@ -134,7 +134,7 @@ stages:
               path: .ci-results/x86_64
 
       build_aarch64:
-        name: build-aarch64
+        name: Build_aarch64
         runs-on: [self-hosted, ubse, arm, cpu=8]
         timeout-minutes: 60
         container:
@@ -223,7 +223,7 @@ stages:
               path: .ci-results/aarch64
 
       ut:
-        name: UT
+        name: UT_atomic
         runs-on: [self-hosted, ubse, arm, cpu=8]
         timeout-minutes: 10
         container:
