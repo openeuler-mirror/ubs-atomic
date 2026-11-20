@@ -62,8 +62,9 @@ jobs:
         if: ${{ atomgit.event.pull_request.number != '' }}
         uses: openlibing/pr-label-action@v1.0.0
         with:
-          add_labels: ci-pipeline-running
-          remove_labels: ci-pipeline-passed,ci-pipeline-failed
+          token: ${{ secrets.OPENEULER_BOT_TOKEN }}
+          add_labels: ci_processing
+          remove_labels: ci_failed,ci_successful
 
   issue_check:
     name: Issue check
@@ -272,5 +273,6 @@ jobs:
         if: ${{ steps.freshness.outputs.is_latest == 'true' }}
         uses: openlibing/pr-label-action@v1.0.0
         with:
-          add_labels: ${{ needs.mark_running.result == 'success' && needs.issue_check.result == 'success' && needs.check_sca.result == 'success' && needs.check_anti_poisoning.result == 'success' && needs.validation.result == 'success' && 'ci-pipeline-passed' || 'ci-pipeline-failed' }}
-          remove_labels: ci-pipeline-running,${{ needs.mark_running.result == 'success' && needs.issue_check.result == 'success' && needs.check_sca.result == 'success' && needs.check_anti_poisoning.result == 'success' && needs.validation.result == 'success' && 'ci-pipeline-failed' || 'ci-pipeline-passed' }}
+          token: ${{ secrets.OPENEULER_BOT_TOKEN }}
+          add_labels: ${{ needs.mark_running.result == 'success' && needs.issue_check.result == 'success' && needs.check_sca.result == 'success' && needs.check_anti_poisoning.result == 'success' && needs.validation.result == 'success' && 'ci_successful' || 'ci_failed' }}
+          remove_labels: ci_processing,${{ needs.mark_running.result == 'success' && needs.issue_check.result == 'success' && needs.check_sca.result == 'success' && needs.check_anti_poisoning.result == 'success' && needs.validation.result == 'success' && 'ci_failed' || 'ci_successful' }}
